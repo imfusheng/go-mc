@@ -4,9 +4,9 @@ import (
 	"io"
 	"reflect"
 
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/nbt"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/chat"
+	"github.com/imfusheng/go-mc/nbt"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 type Registries struct {
@@ -75,8 +75,34 @@ type Dimension struct {
 }
 
 type RegistryCodec interface {
+	pk.FieldEncoder
 	pk.FieldDecoder
 	ReadTagsFrom(r io.Reader) (int64, error)
+}
+
+// NetworkRegistry pairs a configuration registry identifier with its entries
+// codec. The order is deterministic and follows the fields in Registries.
+type NetworkRegistry struct {
+	ID    string
+	Codec RegistryCodec
+}
+
+// NetworkRegistries returns every registry represented by c.
+func (c *Registries) NetworkRegistries() []NetworkRegistry {
+	codecVal := reflect.ValueOf(c).Elem()
+	codecTyp := codecVal.Type()
+	result := make([]NetworkRegistry, 0, codecVal.NumField())
+	for i := 0; i < codecVal.NumField(); i++ {
+		registryID, ok := codecTyp.Field(i).Tag.Lookup("registry")
+		if !ok {
+			continue
+		}
+		result = append(result, NetworkRegistry{
+			ID:    registryID,
+			Codec: codecVal.Field(i).Addr().Interface().(RegistryCodec),
+		})
+	}
+	return result
 }
 
 func (c *Registries) Registry(id string) RegistryCodec {

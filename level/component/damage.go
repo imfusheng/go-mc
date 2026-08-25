@@ -1,6 +1,6 @@
 package component
 
-import pk "github.com/Tnze/go-mc/net/packet"
+import pk "github.com/imfusheng/go-mc/net/packet"
 
 var _ DataComponent = (*Damage)(nil)
 

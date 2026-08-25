@@ -3,8 +3,8 @@ package basic
 import (
 	"time"
 
-	"github.com/Tnze/go-mc/data/packetid"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/data/packetid"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 const keepAliveDuration = time.Second * 20
@@ -22,13 +22,16 @@ func (p *Player) handleKeepAlivePacket(packet pk.Packet) error {
 
 	p.resetKeepAliveDeadline()
 
-	// Response
-	err := p.c.Conn.WritePacket(pk.Packet{
-		ID:   int32(packetid.ServerboundKeepAlive),
-		Data: packet.Data,
-	})
+	// Response. The incoming packet buffer is borrowed from bot.Conn and is
+	// returned to its pool as soon as this handler exits. Re-encode the value so
+	// the asynchronous writer owns independent storage.
+	err := p.c.Conn.WritePacket(keepAliveResponse(KeepAliveID))
 	if err != nil {
 		return Error{err}
 	}
 	return nil
+}
+
+func keepAliveResponse(id pk.Long) pk.Packet {
+	return pk.Marshal(packetid.ServerboundKeepAlive, id)
 }

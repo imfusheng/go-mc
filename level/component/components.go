@@ -1,10 +1,101 @@
 package component
 
-import pk "github.com/Tnze/go-mc/net/packet"
+import (
+	"errors"
+	"fmt"
+	"reflect"
+
+	"github.com/imfusheng/go-mc/data/registryid"
+	pk "github.com/imfusheng/go-mc/net/packet"
+)
 
 type DataComponent interface {
 	pk.Field
 	ID() string
+}
+
+var (
+	// ErrNilComponent is returned when a nil DataComponent is used where a
+	// concrete component value is required.
+	ErrNilComponent = errors.New("nil data component")
+	// ErrUnknownComponent is returned for a component name or numeric type ID
+	// that is not present in the protocol 767 data-component registry.
+	ErrUnknownComponent = errors.New("unknown data component")
+	// ErrUnsupportedComponent is returned for a protocol 767 component whose
+	// payload codec has not been implemented by this package.
+	ErrUnsupportedComponent = errors.New("unsupported data component")
+
+	protocol767TypeNames = append([]string(nil), registryid.DataComponentType...)
+)
+
+// TypeError describes a failed data-component registry lookup.
+type TypeError struct {
+	Kind error
+	ID   int32
+	Name string
+}
+
+func (e *TypeError) Error() string {
+	switch {
+	case e.Name != "" && e.ID >= 0:
+		return fmt.Sprintf("%v %q (type %d)", e.Kind, e.Name, e.ID)
+	case e.Name != "":
+		return fmt.Sprintf("%v %q", e.Kind, e.Name)
+	default:
+		return fmt.Sprintf("%v type %d", e.Kind, e.ID)
+	}
+}
+
+func (e *TypeError) Unwrap() error { return e.Kind }
+
+// TypeCount returns the number of data-component types in the protocol 767
+// registry. Valid numeric type IDs are in the range [0, TypeCount()).
+func TypeCount() int { return len(protocol767TypeNames) }
+
+// TypeName resolves a protocol 767 numeric data-component type ID.
+func TypeName(id int32) (string, bool) {
+	if id < 0 || int(id) >= len(protocol767TypeNames) {
+		return "", false
+	}
+	return protocol767TypeNames[id], true
+}
+
+// TypeID resolves a data component to its protocol 767 numeric type ID.
+func TypeID(value DataComponent) (int32, error) {
+	if value == nil || isNilComponent(value) {
+		return -1, ErrNilComponent
+	}
+
+	name, err := componentName(value)
+	if err != nil {
+		return -1, err
+	}
+	for id, candidate := range protocol767TypeNames {
+		if candidate == name {
+			return int32(id), nil
+		}
+	}
+	return -1, &TypeError{Kind: ErrUnknownComponent, ID: -1, Name: name}
+}
+
+func isNilComponent(value DataComponent) bool {
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+func componentName(value DataComponent) (name string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			name = ""
+			err = fmt.Errorf("data component ID panicked: %v", recovered)
+		}
+	}()
+	return value.ID(), nil
 }
 
 func NewComponent(id int32) DataComponent {

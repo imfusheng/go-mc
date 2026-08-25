@@ -4,7 +4,9 @@ import "slices"
 
 type Registry[E any] struct {
 	keys    map[string]int32
+	names   []string
 	values  []E
+	present []bool
 	indices map[*E]int32
 	tags    map[string][]*E
 }
@@ -12,7 +14,9 @@ type Registry[E any] struct {
 func NewRegistry[E any]() Registry[E] {
 	return Registry[E]{
 		keys:    make(map[string]int32),
+		names:   make([]string, 0, 256),
 		values:  make([]E, 0, 256),
+		present: make([]bool, 0, 256),
 		indices: make(map[*E]int32),
 		tags:    make(map[string][]*E),
 	}
@@ -20,7 +24,9 @@ func NewRegistry[E any]() Registry[E] {
 
 func (r *Registry[E]) Clear() {
 	r.keys = make(map[string]int32)
+	r.names = r.names[:0]
 	r.values = r.values[:0]
+	r.present = r.present[:0]
 	r.indices = make(map[*E]int32)
 	r.tags = make(map[string][]*E)
 }
@@ -41,9 +47,15 @@ func (r *Registry[E]) GetByID(id int32) *E {
 }
 
 func (r *Registry[E]) Put(key string, data E) (id int32, val *E) {
+	return r.put(key, data, true)
+}
+
+func (r *Registry[E]) put(key string, data E, present bool) (id int32, val *E) {
 	id = int32(len(r.values))
 	r.keys[key] = id
+	r.names = append(r.names, key)
 	r.values = append(r.values, data)
+	r.present = append(r.present, present)
 	val = &r.values[id]
 	r.indices[val] = id
 	return

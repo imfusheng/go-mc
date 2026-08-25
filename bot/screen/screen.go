@@ -2,13 +2,15 @@ package screen
 
 import (
 	"errors"
+	"fmt"
 	"io"
 
-	"github.com/Tnze/go-mc/bot"
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/data/packetid"
-	"github.com/Tnze/go-mc/nbt"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/bot"
+	"github.com/imfusheng/go-mc/chat"
+	"github.com/imfusheng/go-mc/data/packetid"
+	"github.com/imfusheng/go-mc/level/component"
+	"github.com/imfusheng/go-mc/nbt"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 type Manager struct {
@@ -190,36 +192,268 @@ func (m *Manager) onSetSlot(p pk.Packet) (err error) {
 }
 
 type Slot struct {
-	ID    pk.VarInt
-	Count pk.VarInt
-	NBT   nbt.RawMessage
+	ID                pk.VarInt
+	Count             pk.VarInt
+	Components        []component.DataComponent
+	RemovedComponents []pk.VarInt
+
+	// NBT is retained for source compatibility with the pre-1.20.5 Slot
+	// representation. Protocol 767 does not encode this field; callers must
+	// represent item metadata with Components instead.
+	//
+	// Deprecated: use Components and RemovedComponents.
+	NBT nbt.RawMessage
 }
 
 func (s *Slot) WriteTo(w io.Writer) (n int64, err error) {
-	var present pk.Boolean = s != nil
-	return pk.Tuple{
-		present, pk.Opt{
-			Has: present,
-			Field: pk.Tuple{
-				&s.ID, &s.Count, pk.NBT(&s.NBT),
-			},
-		},
-	}.WriteTo(w)
+	if s == nil {
+		return pk.VarInt(0).WriteTo(w)
+	}
+	if s.Count < 0 {
+		return 0, fmt.Errorf("slot count must not be negative: %d", s.Count)
+	}
+	if s.Count > 0 && s.ID < 0 {
+		return 0, fmt.Errorf("slot item ID must not be negative: %d", s.ID)
+	}
+	if s.NBT.Type != 0 || len(s.NBT.Data) != 0 {
+		return 0, errors.New("slot NBT cannot be encoded in protocol 767; use data components")
+	}
+	if s.Count == 0 {
+		if s.ID != 0 || len(s.Components) != 0 || len(s.RemovedComponents) != 0 {
+			return 0, errors.New("empty slot must not contain an item ID or data components")
+		}
+		return s.Count.WriteTo(w)
+	}
+
+	componentIDs, err := validateSlotComponents(s.Components, s.RemovedComponents)
+	if err != nil {
+		return 0, err
+	}
+
+	fields := pk.Tuple{
+		s.Count,
+		s.ID,
+		pk.VarInt(len(s.Components)),
+		pk.VarInt(len(s.RemovedComponents)),
+	}
+	for i, value := range s.Components {
+		fields = append(fields, componentIDs[i], componentWriter{
+			id:    int32(componentIDs[i]),
+			value: value,
+		})
+	}
+	for _, id := range s.RemovedComponents {
+		fields = append(fields, id)
+	}
+	return fields.WriteTo(w)
 }
 
 func (s *Slot) ReadFrom(r io.Reader) (n int64, err error) {
-	var componentsAdd, componentsRemove pk.VarInt
-	return pk.Tuple{
-		&s.Count, pk.Opt{
-			Has: func() bool { return s.Count > 0 },
-			Field: pk.Tuple{
-				&s.ID,
-				&componentsAdd,
-				&componentsRemove,
-				// TODO: Components Ignored
-			},
-		},
-	}.ReadFrom(r)
+	if s == nil {
+		return 0, errors.New("cannot decode a slot into a nil receiver")
+	}
+
+	var decoded Slot
+	n1, err := decoded.Count.ReadFrom(r)
+	n += n1
+	if err != nil {
+		return n, fmt.Errorf("read slot count: %w", err)
+	}
+	if decoded.Count < 0 {
+		return n, fmt.Errorf("slot count must not be negative: %d", decoded.Count)
+	}
+	if decoded.Count == 0 {
+		*s = decoded
+		return n, nil
+	}
+
+	var addedCount, removedCount pk.VarInt
+	for _, entry := range []struct {
+		name  string
+		field pk.FieldDecoder
+	}{
+		{name: "item ID", field: &decoded.ID},
+		{name: "added component count", field: &addedCount},
+		{name: "removed component count", field: &removedCount},
+	} {
+		n1, readErr := entry.field.ReadFrom(r)
+		n += n1
+		if readErr != nil {
+			return n, fmt.Errorf("read slot %s: %w", entry.name, readErr)
+		}
+	}
+	if err := validateComponentCount("added", addedCount); err != nil {
+		return n, err
+	}
+	if err := validateComponentCount("removed", removedCount); err != nil {
+		return n, err
+	}
+	if decoded.ID < 0 {
+		return n, fmt.Errorf("slot item ID must not be negative: %d", decoded.ID)
+	}
+
+	decoded.Components = make([]component.DataComponent, 0, int(addedCount))
+	decoded.RemovedComponents = make([]pk.VarInt, 0, int(removedCount))
+	seen := make(map[int32]string, int(addedCount)+int(removedCount))
+	for i := 0; i < int(addedCount); i++ {
+		var wireID pk.VarInt
+		n1, readErr := wireID.ReadFrom(r)
+		n += n1
+		if readErr != nil {
+			return n, fmt.Errorf("read added component %d type: %w", i, readErr)
+		}
+		id := int32(wireID)
+		name, ok := component.TypeName(id)
+		if !ok {
+			return n, &component.TypeError{Kind: component.ErrUnknownComponent, ID: id}
+		}
+		if previous, duplicate := seen[id]; duplicate {
+			return n, fmt.Errorf("duplicate data component %q (type %d) in %s and added sets", name, id, previous)
+		}
+		value := component.NewComponent(id)
+		if value == nil {
+			return n, &component.TypeError{Kind: component.ErrUnsupportedComponent, ID: id, Name: name}
+		}
+		n1, readErr = readComponentPayload(r, id, value)
+		n += n1
+		if readErr != nil {
+			return n, readErr
+		}
+		seen[id] = "added"
+		decoded.Components = append(decoded.Components, value)
+	}
+	for i := 0; i < int(removedCount); i++ {
+		var wireID pk.VarInt
+		n1, readErr := wireID.ReadFrom(r)
+		n += n1
+		if readErr != nil {
+			return n, fmt.Errorf("read removed component %d type: %w", i, readErr)
+		}
+		id := int32(wireID)
+		name, ok := component.TypeName(id)
+		if !ok {
+			return n, &component.TypeError{Kind: component.ErrUnknownComponent, ID: id}
+		}
+		if previous, duplicate := seen[id]; duplicate {
+			return n, fmt.Errorf("duplicate data component %q (type %d) in %s and removed sets", name, id, previous)
+		}
+		seen[id] = "removed"
+		decoded.RemovedComponents = append(decoded.RemovedComponents, wireID)
+	}
+
+	*s = decoded
+	return n, nil
+}
+
+// ErrComponentCodecPanic identifies a panic recovered at the component codec
+// boundary.
+var ErrComponentCodecPanic = errors.New("data component codec panicked")
+
+// ComponentCodecPanicError reports an unsafe component codec implementation
+// without allowing its panic to escape the Slot network boundary.
+type ComponentCodecPanicError struct {
+	Operation string
+	TypeID    int32
+	Name      string
+	Panic     any
+}
+
+func (e *ComponentCodecPanicError) Error() string {
+	return fmt.Sprintf("%s data component %q (type %d): %v: %v", e.Operation, e.Name, e.TypeID, ErrComponentCodecPanic, e.Panic)
+}
+
+func (e *ComponentCodecPanicError) Unwrap() error { return ErrComponentCodecPanic }
+
+type componentWriter struct {
+	id    int32
+	value component.DataComponent
+}
+
+func (c componentWriter) WriteTo(w io.Writer) (n int64, err error) {
+	name, _ := component.TypeName(c.id)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = &ComponentCodecPanicError{
+				Operation: "encode",
+				TypeID:    c.id,
+				Name:      name,
+				Panic:     recovered,
+			}
+		}
+	}()
+	n, err = c.value.WriteTo(w)
+	if err != nil {
+		err = fmt.Errorf("encode data component %q (type %d): %w", name, c.id, err)
+	}
+	return n, err
+}
+
+func readComponentPayload(r io.Reader, id int32, value component.DataComponent) (n int64, err error) {
+	name, _ := component.TypeName(id)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = &ComponentCodecPanicError{
+				Operation: "decode",
+				TypeID:    id,
+				Name:      name,
+				Panic:     recovered,
+			}
+		}
+	}()
+	n, err = value.ReadFrom(r)
+	if err != nil {
+		err = fmt.Errorf("decode data component %q (type %d): %w", name, id, err)
+	}
+	return n, err
+}
+
+func validateComponentCount(kind string, count pk.VarInt) error {
+	if count < 0 {
+		return fmt.Errorf("slot %s component count must not be negative: %d", kind, count)
+	}
+	if int(count) > component.TypeCount() {
+		return fmt.Errorf("slot %s component count %d exceeds protocol 767 registry size %d", kind, count, component.TypeCount())
+	}
+	return nil
+}
+
+func validateSlotComponents(added []component.DataComponent, removed []pk.VarInt) ([]pk.VarInt, error) {
+	if err := validateComponentCount("added", pk.VarInt(len(added))); err != nil {
+		return nil, err
+	}
+	if err := validateComponentCount("removed", pk.VarInt(len(removed))); err != nil {
+		return nil, err
+	}
+
+	ids := make([]pk.VarInt, len(added))
+	seen := make(map[int32]string, len(added)+len(removed))
+	for i, value := range added {
+		id, err := component.TypeID(value)
+		if err != nil {
+			return nil, fmt.Errorf("resolve added component %d: %w", i, err)
+		}
+		name, _ := component.TypeName(id)
+		if component.NewComponent(id) == nil {
+			return nil, &component.TypeError{Kind: component.ErrUnsupportedComponent, ID: id, Name: name}
+		}
+		if previous, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("duplicate data component %q (type %d) in %s and added sets", name, id, previous)
+		}
+		seen[id] = "added"
+		ids[i] = pk.VarInt(id)
+	}
+	for i, wireID := range removed {
+		id := int32(wireID)
+		name, ok := component.TypeName(id)
+		if !ok {
+			return nil, &component.TypeError{Kind: component.ErrUnknownComponent, ID: id}
+		}
+		if previous, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("duplicate data component %q (type %d) in %s and removed sets", name, id, previous)
+		}
+		seen[id] = fmt.Sprintf("removed component %d", i)
+	}
+	return ids, nil
 }
 
 type Container interface {

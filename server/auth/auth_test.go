@@ -1,10 +1,15 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
+
+	pk "github.com/imfusheng/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/protocol"
+	"github.com/imfusheng/go-mc/yggdrasil/user"
 )
 
 func TestResp(t *testing.T) {
@@ -54,5 +59,35 @@ func TestResp(t *testing.T) {
 		t.Errorf("cape url not match: %s, want %s",
 			texture.Textures.CAPE.URL,
 			wantCAPE)
+	}
+}
+
+func TestRespTextureHandlesMissingAndUnorderedProperties(t *testing.T) {
+	if _, err := (*Resp)(nil).Texture(); err == nil {
+		t.Fatal("nil Resp.Texture() succeeded")
+	}
+	if _, err := (&Resp{}).Texture(); err == nil {
+		t.Fatal("empty Resp.Texture() succeeded")
+	}
+
+	resp := Resp{Properties: []user.Property{
+		{Name: "unrelated", Value: "not base64"},
+		{Name: "textures", Value: "e30="},
+	}}
+	if _, err := resp.Texture(); err != nil {
+		t.Fatalf("Resp.Texture() error = %v", err)
+	}
+}
+
+func TestReadBoundedAuthByteArrayRejectsNegativeLength(t *testing.T) {
+	data := pk.Marshal(0, pk.VarInt(-1)).Data
+	if _, err := readBoundedAuthByteArray(bytes.NewReader(data), 16, "test"); err == nil {
+		t.Fatal("readBoundedAuthByteArray() accepted a negative length")
+	}
+}
+
+func TestEncryptForProfileValidatesArguments(t *testing.T) {
+	if _, err := EncryptForProfile(nil, "ProfileTest", nil, protocol.MustByName("1.21.1")); err == nil {
+		t.Fatal("EncryptForProfile() accepted nil connection and key")
 	}
 }

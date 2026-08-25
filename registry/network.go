@@ -5,7 +5,7 @@ import (
 	"io"
 	"strconv"
 
-	pk "github.com/Tnze/go-mc/net/packet"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 func (reg *Registry[E]) ReadFrom(r io.Reader) (int64, error) {
@@ -38,10 +38,43 @@ func (reg *Registry[E]) ReadFrom(r io.Reader) (int64, error) {
 			if err != nil {
 				return n + n1 + n2 + n3, err
 			}
-			reg.Put(string(key), data)
 		}
+		reg.put(string(key), data, bool(hasData))
 
 		n += n1 + n2 + n3
+	}
+	return n, nil
+}
+
+// WriteTo encodes a configuration Registry Data entries array. Presence bits
+// are preserved when a registry was decoded from the network; values inserted
+// with Put are encoded with data.
+func (reg Registry[E]) WriteTo(w io.Writer) (int64, error) {
+	if len(reg.names) != len(reg.values) || len(reg.present) != len(reg.values) {
+		return 0, errors.New("registry: inconsistent internal lengths")
+	}
+	n, err := pk.VarInt(len(reg.values)).WriteTo(w)
+	if err != nil {
+		return n, err
+	}
+	for i := range reg.values {
+		n1, err := pk.Identifier(reg.names[i]).WriteTo(w)
+		n += n1
+		if err != nil {
+			return n, err
+		}
+		n1, err = pk.Boolean(reg.present[i]).WriteTo(w)
+		n += n1
+		if err != nil {
+			return n, err
+		}
+		if reg.present[i] {
+			n1, err = (pk.NBTField{V: &reg.values[i]}).WriteTo(w)
+			n += n1
+			if err != nil {
+				return n, err
+			}
+		}
 	}
 	return n, nil
 }

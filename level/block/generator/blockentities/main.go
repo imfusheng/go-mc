@@ -10,8 +10,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/Tnze/go-mc/internal/generateutils"
-	"github.com/Tnze/go-mc/nbt"
+	"github.com/imfusheng/go-mc/internal/generateutils"
+	"github.com/imfusheng/go-mc/nbt"
 )
 
 //go:embed blockentities.go.tmpl

@@ -32,14 +32,14 @@ import (
 	"errors"
 	"log"
 
-	"github.com/Tnze/go-mc/data/packetid"
-	"github.com/Tnze/go-mc/net"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/chat"
+	"github.com/imfusheng/go-mc/net"
+	"github.com/imfusheng/go-mc/protocol"
 )
 
 const (
-	ProtocolName    = "1.20.2"
-	ProtocolVersion = 764
+	ProtocolName    = "1.21.1"
+	ProtocolVersion = 767
 )
 
 type Server struct {
@@ -55,6 +55,7 @@ func (s *Server) Listen(addr string) error {
 	if err != nil {
 		return err
 	}
+	defer listener.Close()
 
 	for {
 		conn, err := listener.Accept()
@@ -66,44 +67,77 @@ func (s *Server) Listen(addr string) error {
 }
 
 func (s *Server) AcceptConn(conn *net.Conn) {
+	if conn == nil || conn.Socket == nil {
+		return
+	}
 	defer conn.Close()
-	protocol, intention, err := s.handshake(conn)
+	protocolNumber, intention, err := s.handshake(conn)
 	if err != nil {
 		return
 	}
 
 	switch intention {
 	case 1: // list ping
-		s.acceptListPing(conn, protocol)
+		if s.ListPingHandler == nil {
+			return
+		}
+		s.acceptListPing(conn, protocolNumber)
 	case 2: // login
-		name, id, profilePubKey, properties, err := s.AcceptLogin(conn, protocol)
+		profile, ok := protocol.ByProtocol(protocolNumber)
+		if !ok || profile.Capabilities().Login == protocol.Unsupported {
+			if s.Logger != nil {
+				s.Logger.Printf("client %v requested unsupported protocol %d", conn.Socket.RemoteAddr(), protocolNumber)
+			}
+			_ = writeLoginDisconnect(conn, protocolNumber, chat.Text("Unsupported Minecraft protocol"))
+			return
+		}
+		if profile.Capabilities().PlayCore == protocol.Unsupported {
+			if s.Logger != nil {
+				s.Logger.Printf("client %v play state for Minecraft %s is not supported", conn.Socket.RemoteAddr(), profile.Version().Name)
+			}
+			_ = writeLoginDisconnect(conn, protocolNumber, chat.Text("This Minecraft version's play state is not supported"))
+			return
+		}
+		if profile.HasConfigurationState() && profile.Capabilities().Configuration == protocol.Unsupported {
+			if s.Logger != nil {
+				s.Logger.Printf("client %v configuration for Minecraft %s is not supported", conn.Socket.RemoteAddr(), profile.Version().Name)
+			}
+			_ = writeLoginDisconnect(conn, protocolNumber, chat.Text("This Minecraft version's configuration state is not supported"))
+			return
+		}
+		if s.LoginHandler == nil || s.GamePlay == nil || (profile.HasConfigurationState() && s.ConfigHandler == nil) {
+			if s.Logger != nil {
+				s.Logger.Printf("client %v cannot log in: server handlers are incomplete", conn.Socket.RemoteAddr())
+			}
+			_ = writeLoginDisconnect(conn, protocolNumber, chat.Text("Server login handlers are not configured"))
+			return
+		}
+		name, id, profilePubKey, properties, err := s.AcceptLogin(conn, protocolNumber)
 		if err != nil {
 			var loginErr LoginFailErr
 			if errors.As(err, &loginErr) {
-				_ = conn.WritePacket(pk.Marshal(
-					packetid.ClientboundLoginLoginDisconnect,
-					loginErr.reason,
-				))
+				_ = writeLoginDisconnect(conn, protocolNumber, loginErr.reason)
 			}
 			if s.Logger != nil {
 				s.Logger.Printf("client %v login error: %v", conn.Socket.RemoteAddr(), err)
 			}
 			return
 		}
-		s.AcceptConfig(conn)
+		if profile.HasConfigurationState() {
+			err = s.acceptConfigForProfile(conn, profile)
+		}
 		if err != nil {
 			var configErr ConfigFailErr
 			if errors.As(err, &configErr) {
-				_ = conn.WritePacket(pk.Marshal(
-					packetid.ClientboundConfigDisconnect,
-					configErr.reason,
-				))
+				if disconnectErr := writeConfigDisconnect(conn, profile, configErr.reason); disconnectErr != nil && s.Logger != nil {
+					s.Logger.Printf("client %v configuration disconnect encoding error: %v", conn.Socket.RemoteAddr(), disconnectErr)
+				}
 			}
 			if s.Logger != nil {
 				s.Logger.Printf("client %v config error: %v", conn.Socket.RemoteAddr(), err)
 			}
 			return
 		}
-		s.AcceptPlayer(name, id, profilePubKey, properties, protocol, conn)
+		s.AcceptPlayer(name, id, profilePubKey, properties, protocolNumber, conn)
 	}
 }

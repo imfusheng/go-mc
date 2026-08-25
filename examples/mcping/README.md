@@ -1,14 +1,23 @@
 # mcping
 
-A ping tool for Minecraft: Java Edition.  
-适用于Minecraft: Java Edition的ping工具。
+适用于 Minecraft: Java Edition 的 ping 工具。
 
-Install with go tools:  
-    ```go get -u github.com/Tnze/go-mc/cmd/mcping```
-    `$GOPATH/bin` should in your `$PATH`.
+使用 Go 工具安装：
 
-Install with Homebrew:  
-    ```brew tap Tnze/tap && brew install mcping```
+```sh
+go install github.com/imfusheng/go-mc/examples/mcping@latest
+```
 
-Usage:  
-    ```mcping <hostname>[:port]```
+`$GOPATH/bin` 应包含在 `$PATH` 中。
+
+使用 Homebrew 安装：
+
+```sh
+brew tap Tnze/tap && brew install mcping
+```
+
+用法：
+
+```sh
+mcping <hostname>[:port]
+```

@@ -4,10 +4,12 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"strings"
 	"text/template"
@@ -15,13 +17,17 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Tnze/go-mc/bot"
-	"github.com/Tnze/go-mc/chat"
+	"github.com/imfusheng/go-mc/bot"
+	"github.com/imfusheng/go-mc/chat"
+	mcprotocol "github.com/imfusheng/go-mc/protocol"
 )
 
 var (
-	protocol = flag.Int("p", 578, "The protocol version number sent during ping")
-	favicon  = flag.String("f", "", "If specified, the server's icon will be save to")
+	protocolNumber = flag.Int("p", int(mcprotocol.LatestRelease().Protocol), "The protocol version number sent during ping")
+	transportName  = flag.String("transport", "netty", "Wire transport: netty (1.7+) or legacy (1.0-1.6)")
+	versionName    = flag.String("version", "", "Requested release name (for example 1.6.4)")
+	majorVersion   = flag.String("major", "", "Release family; required for legacy pings (for example 1.6)")
+	favicon        = flag.String("f", "", "If specified, the server's icon will be save to")
 )
 
 type status struct {
@@ -77,8 +83,35 @@ func (s *status) String() string {
 }
 
 func usage() {
-	_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n%s [-f] [-p] <address>[:port]\n", os.Args[0])
+	_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n%s [options] <address>[:port]\n", os.Args[0])
 	flag.PrintDefaults()
+}
+
+func pingOptions(protocolNumber int, transportName, versionName, majorVersion string) (bot.PingOptions, error) {
+	var transport mcprotocol.Transport
+	switch strings.ToLower(transportName) {
+	case "netty":
+		transport = mcprotocol.TransportNetty
+	case "legacy":
+		transport = mcprotocol.TransportLegacy
+		if majorVersion == "" {
+			return bot.PingOptions{}, errors.New("-major is required when -transport=legacy")
+		}
+	default:
+		return bot.PingOptions{}, fmt.Errorf("unsupported transport %q: use netty or legacy", transportName)
+	}
+	if protocolNumber < math.MinInt32 || protocolNumber > math.MaxInt32 {
+		return bot.PingOptions{}, fmt.Errorf("protocol number %d is outside the signed 32-bit range", protocolNumber)
+	}
+	if versionName == "" {
+		versionName = majorVersion
+	}
+	return bot.PingOptions{Version: mcprotocol.Version{
+		Name:      versionName,
+		Major:     majorVersion,
+		Protocol:  int32(protocolNumber),
+		Transport: transport,
+	}}, nil
 }
 
 func main() {
@@ -91,8 +124,14 @@ func main() {
 		os.Exit(2)
 	}
 
+	options, err := pingOptions(*protocolNumber, *transportName, *versionName, *majorVersion)
+	if err != nil {
+		fmt.Printf("Invalid ping options: %v\n", err)
+		os.Exit(2)
+	}
+
 	fmt.Printf("MCPING (%s):", addr)
-	resp, delay, err := bot.PingAndList(addr)
+	resp, delay, err := bot.PingAndListWithOptions(addr, options)
 	if err != nil {
 		fmt.Printf("Ping and list server fail: %v", err)
 		os.Exit(1)

@@ -1,9 +1,8 @@
-## Updating `data`
+## 更新 `data`
 
-1. Go to [https://github.com/PrismarineJS/minecraft-data/tree/master/data/pc/{version}](https://github.com/PrismarineJS/minecraft-data/tree/master/data/pc)
-2. Update `version` in the following files if there is a new corresponding JSON file available:
-   - [gen_block.go](block/gen_block.go) - `blocks.json`
+1. 前往 [https://github.com/PrismarineJS/minecraft-data/tree/master/data/pc/{version}](https://github.com/PrismarineJS/minecraft-data/tree/master/data/pc)
+2. 如果有新的对应 JSON 文件可用，请更新以下文件中的 `version`：
    - [gen_entity.go](entity/gen_entity.go) - `entities.json`
    - [gen_item.go](item/gen_item.go) - `items.json`
-3. Update the `URL` in [gen_soundid.go](soundid/gen_soundid.go) (verify the URL returns a response first)
-4. Run `go generate ./...`
+3. 更新 [gen_soundid.go](soundid/gen_soundid.go) 中的 `URL`（请先确认该 URL 能够返回响应）
+4. 运行 `go generate ./...`

@@ -1,19 +1,25 @@
 package server
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
+	"unicode/utf8"
 
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/data/packetid"
-	"github.com/Tnze/go-mc/net"
-	pk "github.com/Tnze/go-mc/net/packet"
-	"github.com/Tnze/go-mc/offline"
-	"github.com/Tnze/go-mc/server/auth"
-	"github.com/Tnze/go-mc/yggdrasil/user"
+	"github.com/imfusheng/go-mc/chat"
+	"github.com/imfusheng/go-mc/net"
+	pk "github.com/imfusheng/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/offline"
+	"github.com/imfusheng/go-mc/protocol"
+	"github.com/imfusheng/go-mc/server/auth"
+	"github.com/imfusheng/go-mc/yggdrasil/user"
 
 	"github.com/google/uuid"
 )
@@ -89,24 +95,54 @@ func (d *MojangLoginHandler) getPrivateKey() (key *rsa.PrivateKey, err error) {
 */
 
 // AcceptLogin implement LoginHandler for MojangLoginHandler
-func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocol int32) (name string, id uuid.UUID, profilePubKey *user.PublicKey, properties []user.Property, err error) {
+func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocolNumber int32) (name string, id uuid.UUID, profilePubKey *user.PublicKey, properties []user.Property, err error) {
+	if conn == nil {
+		err = fmt.Errorf("nil connection")
+		return
+	}
+	wireProfile, ok := protocol.ByProtocol(protocolNumber)
+	if !ok || wireProfile.Capabilities().Login == protocol.Unsupported {
+		err = fmt.Errorf("unsupported Minecraft protocol %d", protocolNumber)
+		return
+	}
+
 	// login start
 	var p pk.Packet
 	err = conn.ReadPacket(&p)
 	if err != nil {
 		return
 	}
-	if packetid.ServerboundPacketID(p.ID) != packetid.ServerboundLoginHello {
-		err = wrongPacketErr{expect: int32(packetid.ServerboundLoginHello), get: p.ID}
+	var kind protocol.PacketKind
+	kind, err = protocol.RequirePacketKind(wireProfile, protocol.StateLogin, protocol.Serverbound, p.ID)
+	if err != nil {
+		return
+	}
+	if kind != protocol.PacketLoginStart {
+		var expected int32
+		expected, err = protocol.RequirePacketID(wireProfile, protocol.StateLogin, protocol.Serverbound, protocol.PacketLoginStart)
+		if err == nil {
+			err = wrongPacketErr{expect: expected, get: p.ID}
+		}
 		return
 	}
 
-	err = p.Scan(
-		(*pk.String)(&name), // decode username as pk.String
-		(*pk.UUID)(&id),
-	)
+	name, id, profilePubKey, err = readLoginStart(wireProfile, p)
 	if err != nil {
 		return
+	}
+	if d.EnforceSecureProfile {
+		switch wireProfile.LoginStartStyle() {
+		case protocol.LoginStartNameAndOptionalSignature, protocol.LoginStartNameSignatureAndOptionalUUID:
+			if profilePubKey == nil || !profilePubKey.Verify() {
+				err = LoginFailErr{reason: chat.Text("A valid, unexpired profile public key is required")}
+				return
+			}
+		default:
+			err = fmt.Errorf("enforce secure profile: %w", protocol.UnsupportedCapabilityError{
+				Version: wireProfile.Version().Name, Capability: "login-state secure profile validation",
+			})
+			return
+		}
 	}
 
 	// auth
@@ -118,7 +154,7 @@ func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocol int32) (name s
 		}
 		var resp *auth.Resp
 		// Auth, Encrypt
-		resp, err = auth.Encrypt(conn, name, serverKey)
+		resp, err = auth.EncryptForProfile(conn, name, serverKey, wireProfile)
 		if err != nil {
 			return
 		}
@@ -132,42 +168,254 @@ func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocol int32) (name s
 
 	// set compression
 	if d.Threshold >= 0 {
-		err = conn.WritePacket(pk.Marshal(
-			packetid.ClientboundLoginLoginCompression,
-			pk.VarInt(d.Threshold),
-		))
+		var compressionID int32
+		compressionID, err = protocol.RequirePacketID(wireProfile, protocol.StateLogin, protocol.Clientbound, protocol.PacketLoginSetCompression)
 		if err != nil {
-			return
+			// Login compression was introduced with protocol 47 (Minecraft
+			// 1.8). Earlier audited profiles omit the optional packet entirely.
+			if wireProfile.Key().Transport != protocol.TransportNetty || wireProfile.Key().Protocol >= 47 {
+				return
+			}
+			err = nil
+		} else {
+			err = conn.WritePacket(pk.Marshal(compressionID, pk.VarInt(d.Threshold)))
+			if err != nil {
+				return
+			}
+			conn.SetThreshold(d.Threshold)
 		}
-		conn.SetThreshold(d.Threshold)
 	}
 
 	// check if player can join (whitelist, blacklist, server full or something else)
 	if d.LoginChecker != nil {
-		if ok, result := d.CheckPlayer(name, id, protocol); !ok {
+		if ok, result := d.CheckPlayer(name, id, protocolNumber); !ok {
 			// player is not allowed to join the server
 			err = LoginFailErr{reason: result}
 			return
 		}
 	}
 	// send login success
-	err = conn.WritePacket(pk.Marshal(
-		packetid.ClientboundLoginGameProfile,
-		pk.UUID(id),
-		pk.String(name),
-		pk.Array(properties),
-	))
+	err = writeLoginSuccess(conn, wireProfile, id, name, properties)
 	if err != nil {
 		return
 	}
 
-	// receive login ack
-	err = conn.ReadPacket(&p)
-	if err == nil && packetid.ServerboundPacketID(p.ID) != packetid.ServerboundLoginLoginAcknowledged {
-		err = wrongPacketErr{expect: int32(packetid.ServerboundLoginLoginAcknowledged), get: p.ID}
+	if wireProfile.HasLoginAcknowledgement() {
+		// receive login ack
+		err = conn.ReadPacket(&p)
+		if err == nil {
+			kind, err = protocol.RequirePacketKind(wireProfile, protocol.StateLogin, protocol.Serverbound, p.ID)
+		}
+		if err == nil && kind != protocol.PacketLoginAcknowledged {
+			var expected int32
+			expected, err = protocol.RequirePacketID(wireProfile, protocol.StateLogin, protocol.Serverbound, protocol.PacketLoginAcknowledged)
+			if err == nil {
+				err = wrongPacketErr{expect: expected, get: p.ID}
+			}
+		}
+		if err == nil && len(p.Data) != 0 {
+			err = fmt.Errorf("login acknowledgement contains %d trailing bytes", len(p.Data))
+		}
 	}
 	return
 }
+
+func readLoginStart(profile *protocol.Profile, p pk.Packet) (name string, id uuid.UUID, profilePubKey *user.PublicKey, err error) {
+	if profile == nil {
+		return "", uuid.Nil, nil, fmt.Errorf("nil protocol profile")
+	}
+	r := bytes.NewReader(p.Data)
+	name, err = readLoginString(r, 64, "player name")
+	if err != nil {
+		return "", uuid.Nil, nil, err
+	}
+	if err = validatePlayerName(name); err != nil {
+		return "", uuid.Nil, nil, err
+	}
+	switch profile.LoginStartStyle() {
+	case protocol.LoginStartNameOnly:
+	case protocol.LoginStartNameAndOptionalSignature:
+		profilePubKey, err = readOptionalProfilePublicKey(r)
+	case protocol.LoginStartNameSignatureAndOptionalUUID:
+		if profilePubKey, err = readOptionalProfilePublicKey(r); err == nil {
+			id, err = readOptionalLoginUUID(r)
+		}
+	case protocol.LoginStartNameAndOptionalUUID:
+		id, err = readOptionalLoginUUID(r)
+	case protocol.LoginStartNameAndUUID:
+		var playerID pk.UUID
+		_, err = playerID.ReadFrom(r)
+		id = uuid.UUID(playerID)
+	default:
+		err = protocol.UnsupportedCapabilityError{Version: profile.Version().Name, Capability: "login start"}
+	}
+	if err != nil {
+		return "", uuid.Nil, nil, err
+	}
+	if r.Len() != 0 {
+		return "", uuid.Nil, nil, fmt.Errorf("login start contains %d trailing bytes", r.Len())
+	}
+	return name, id, profilePubKey, nil
+}
+
+const maxProfileKeyFieldLength = 8192
+
+func validatePlayerName(name string) error {
+	if name == "" {
+		return fmt.Errorf("player name is empty")
+	}
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("player name is not valid UTF-8")
+	}
+	if utf8.RuneCountInString(name) > 16 {
+		return fmt.Errorf("player name is longer than 16 characters")
+	}
+	return nil
+}
+
+func readOptionalProfilePublicKey(r *bytes.Reader) (*user.PublicKey, error) {
+	var hasKey pk.Boolean
+	if _, err := hasKey.ReadFrom(r); err != nil {
+		return nil, fmt.Errorf("read profile public key flag: %w", err)
+	}
+	if !hasKey {
+		return nil, nil
+	}
+	var expiresAt pk.Long
+	if _, err := expiresAt.ReadFrom(r); err != nil {
+		return nil, fmt.Errorf("read profile public key expiration: %w", err)
+	}
+	encoded, err := readLoginByteArray(r, maxProfileKeyFieldLength, "profile public key")
+	if err != nil {
+		return nil, err
+	}
+	signature, err := readLoginByteArray(r, maxProfileKeyFieldLength, "profile public key signature")
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := x509.ParsePKIXPublicKey(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("parse profile public key: %w", err)
+	}
+	publicKey, ok := parsed.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("profile public key is %T, expected RSA", parsed)
+	}
+	return &user.PublicKey{
+		ExpiresAt: time.UnixMilli(int64(expiresAt)),
+		PubKey:    publicKey,
+		Signature: signature,
+	}, nil
+}
+
+func readOptionalLoginUUID(r *bytes.Reader) (uuid.UUID, error) {
+	var hasID pk.Boolean
+	if _, err := hasID.ReadFrom(r); err != nil {
+		return uuid.Nil, fmt.Errorf("read profile UUID flag: %w", err)
+	}
+	if !hasID {
+		return uuid.Nil, nil
+	}
+	var id pk.UUID
+	if _, err := id.ReadFrom(r); err != nil {
+		return uuid.Nil, fmt.Errorf("read profile UUID: %w", err)
+	}
+	return uuid.UUID(id), nil
+}
+
+func readLoginString(r *bytes.Reader, max int, field string) (string, error) {
+	value, err := readLoginByteArray(r, max, field)
+	if err != nil {
+		return "", err
+	}
+	if !utf8.Valid(value) {
+		return "", fmt.Errorf("%s is not valid UTF-8", field)
+	}
+	return string(value), nil
+}
+
+func readLoginByteArray(r *bytes.Reader, max int, field string) ([]byte, error) {
+	var length pk.VarInt
+	if _, err := length.ReadFrom(r); err != nil {
+		return nil, fmt.Errorf("read %s length: %w", field, err)
+	}
+	if length < 0 || int64(length) > int64(max) {
+		return nil, fmt.Errorf("invalid %s length %d (maximum %d)", field, length, max)
+	}
+	if int(length) > r.Len() {
+		return nil, fmt.Errorf("%s length %d exceeds remaining packet data %d", field, length, r.Len())
+	}
+	value := make([]byte, int(length))
+	if _, err := io.ReadFull(r, value); err != nil {
+		return nil, fmt.Errorf("read %s: %w", field, err)
+	}
+	return value, nil
+}
+
+func writeLoginSuccess(conn *net.Conn, profile *protocol.Profile, id uuid.UUID, name string, properties []user.Property) error {
+	if conn == nil {
+		return fmt.Errorf("nil connection")
+	}
+	if profile == nil {
+		return fmt.Errorf("nil protocol profile")
+	}
+	if err := validatePlayerName(name); err != nil {
+		return fmt.Errorf("invalid profile name: %w", err)
+	}
+	if len(properties) > maxLoginSuccessProperties {
+		return fmt.Errorf("too many profile properties: %d (maximum %d)", len(properties), maxLoginSuccessProperties)
+	}
+	fields := make([]pk.FieldEncoder, 0, 4)
+	if profile.LoginSuccessUsesStringUUID() {
+		wireID := id.String()
+		// Protocol 4 predates Mojang's switch to canonical dashed UUID
+		// strings in 1.7.6 (protocol 5).
+		if !profile.LoginSuccessStringUUIDUsesDashes() {
+			wireID = strings.ReplaceAll(wireID, "-", "")
+		}
+		fields = append(fields, pk.String(wireID))
+	} else {
+		fields = append(fields, pk.UUID(id))
+	}
+	fields = append(fields, pk.String(name))
+	if profile.LoginSuccessHasProperties() {
+		fields = append(fields, pk.Array(properties))
+	}
+	if profile.LoginSuccessHasStrictErrorHandling() {
+		fields = append(fields, pk.Boolean(false))
+	}
+	packetID, err := protocol.RequirePacketID(profile, protocol.StateLogin, protocol.Clientbound, protocol.PacketLoginSuccess)
+	if err != nil {
+		return err
+	}
+	return conn.WritePacket(pk.Marshal(packetID, fields...))
+}
+
+const maxLoginSuccessProperties = 1024
+
+func writeLoginDisconnect(conn *net.Conn, protocolNumber int32, reason chat.Message) error {
+	if conn == nil {
+		return fmt.Errorf("nil connection")
+	}
+	profile, ok := protocol.ByProtocol(protocolNumber)
+	if !ok {
+		return &protocol.PacketMappingError{
+			Version:   fmt.Sprintf("protocol %d", protocolNumber),
+			State:     protocol.StateLogin,
+			Direction: protocol.Clientbound,
+			Kind:      protocol.PacketLoginDisconnect,
+		}
+	}
+	packetID, err := protocol.RequirePacketID(profile, protocol.StateLogin, protocol.Clientbound, protocol.PacketLoginDisconnect)
+	if err != nil {
+		return err
+	}
+	return conn.WritePacket(pk.Marshal(packetID, chat.JsonMessage(reason)))
+}
+
+// networkChatMessage suppresses chat.Message.MarshalNBT for configuration
+// packets, whose anonymous NBT field already supplies the network-format root.
+type networkChatMessage chat.Message
 
 type GameProfile struct {
 	ID   uuid.UUID

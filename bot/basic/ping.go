@@ -1,8 +1,8 @@
 package basic
 
 import (
-	"github.com/Tnze/go-mc/data/packetid"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/data/packetid"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 func (p *Player) handlePingPacket(packet pk.Packet) error {
@@ -11,13 +11,15 @@ func (p *Player) handlePingPacket(packet pk.Packet) error {
 		return Error{err}
 	}
 
-	// Response
-	err := p.c.Conn.WritePacket(pk.Packet{
-		ID:   int32(packetid.ServerboundPong),
-		Data: packet.Data,
-	})
+	// Response. Do not enqueue packet.Data: receive buffers are returned to a
+	// pool immediately after the handler exits, while writes are asynchronous.
+	err := p.c.Conn.WritePacket(pingResponse(pingID))
 	if err != nil {
 		return Error{err}
 	}
 	return nil
+}
+
+func pingResponse(id pk.Int) pk.Packet {
+	return pk.Marshal(packetid.ServerboundPong, id)
 }

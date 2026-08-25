@@ -3,11 +3,15 @@ package packet_test
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"math"
+	"strings"
 	"testing"
 
-	"github.com/Tnze/go-mc/data/packetid"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/data/packetid"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 var VarInts = []pk.VarInt{0, 1, 2, 127, 128, 255, 25565, 2097151, 2147483647, -1, -2147483648}
@@ -60,6 +64,19 @@ func TestVarInt_ReadFrom_tooLongData(t *testing.T) {
 		t.Logf("unpack \"% x\" error: %v", data, err)
 	} else {
 		t.Errorf("unpack \"% x\" should be error, get %d", data, vi)
+	}
+}
+
+func TestVarIntRejectsSixByteAndOverflowEncodings(t *testing.T) {
+	tests := [][]byte{
+		{0x80, 0x80, 0x80, 0x80, 0x80, 0x00}, // six-byte encoding
+		{0x80, 0x80, 0x80, 0x80, 0x10},       // bits outside a 32-bit value
+	}
+	for _, data := range tests {
+		var got pk.VarInt
+		if n, err := got.ReadFrom(bytes.NewReader(data)); err == nil {
+			t.Fatalf("ReadFrom(% x) succeeded after %d bytes, want error", data, n)
+		}
 	}
 }
 
@@ -120,6 +137,155 @@ func TestVarLong_ReadFrom(t *testing.T) {
 	}
 }
 
+func TestVarLongRejectsOverflowEncoding(t *testing.T) {
+	data := []byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02}
+	var got pk.VarLong
+	if _, err := got.ReadFrom(bytes.NewReader(data)); err == nil {
+		t.Fatalf("ReadFrom(% x) succeeded, want error", data)
+	}
+}
+
+func TestLengthPrefixedTypesRejectInvalidLengthsWithoutPanic(t *testing.T) {
+	encodeVarInt := func(v pk.VarInt) []byte {
+		var b bytes.Buffer
+		if _, err := v.WriteTo(&b); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	encodeLong := func(v pk.Long) []byte {
+		var b bytes.Buffer
+		if _, err := v.WriteTo(&b); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+
+	tests := []struct {
+		name string
+		read func() error
+	}{
+		{
+			name: "negative string",
+			read: func() error {
+				var value pk.String
+				_, err := value.ReadFrom(bytes.NewReader(encodeVarInt(-1)))
+				return err
+			},
+		},
+		{
+			name: "oversized string",
+			read: func() error {
+				var value pk.String
+				_, err := value.ReadFrom(bytes.NewReader(encodeVarInt(pk.MaxStringLength*3 + 1)))
+				return err
+			},
+		},
+		{
+			name: "negative byte array",
+			read: func() error {
+				var value pk.ByteArray
+				_, err := value.ReadFrom(bytes.NewReader(encodeVarInt(-1)))
+				return err
+			},
+		},
+		{
+			name: "oversized byte array",
+			read: func() error {
+				var value pk.ByteArray
+				_, err := value.ReadFrom(bytes.NewReader(encodeVarInt(pk.MaxDataLength + 1)))
+				return err
+			},
+		},
+		{
+			name: "negative bit set",
+			read: func() error {
+				var value pk.BitSet
+				_, err := value.ReadFrom(bytes.NewReader(encodeVarInt(-1)))
+				return err
+			},
+		},
+		{
+			name: "oversized bit set",
+			read: func() error {
+				var value pk.BitSet
+				_, err := value.ReadFrom(bytes.NewReader(encodeVarInt(pk.MaxDataLength/8 + 1)))
+				return err
+			},
+		},
+		{
+			name: "negative array",
+			read: func() error {
+				var value []pk.Int
+				_, err := (pk.Ary[pk.Int]{Ary: &value}).ReadFrom(bytes.NewReader(encodeLong(-1)[4:]))
+				return err
+			},
+		},
+		{
+			name: "64-bit array length on 32-bit host",
+			read: func() error {
+				var value []pk.Int
+				_, err := (pk.Ary[pk.Long]{Ary: &value}).ReadFrom(bytes.NewReader(encodeLong(pk.Long(math.MaxInt64))))
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("decoder panicked: %v", recovered)
+				}
+			}()
+			if err := tt.read(); err == nil {
+				t.Fatal("decoder succeeded, want error")
+			}
+		})
+	}
+}
+
+func TestStringRejectsInvalidUTF8AndOversizedWrites(t *testing.T) {
+	var decoded pk.String
+	if _, err := decoded.ReadFrom(bytes.NewReader([]byte{1, 0xff})); err == nil {
+		t.Fatal("invalid UTF-8 string decoded successfully")
+	}
+	if _, err := pk.String(strings.Repeat("x", pk.MaxStringLength+1)).WriteTo(io.Discard); err == nil {
+		t.Fatal("oversized string encoded successfully")
+	}
+	if _, err := pk.String(strings.Repeat("😀", pk.MaxStringLength/2+1)).WriteTo(io.Discard); err == nil {
+		t.Fatal("string exceeding the UTF-16 code-unit limit encoded successfully")
+	}
+}
+
+func TestByteArrayReadFromReusesAndReslices(t *testing.T) {
+	value := make(pk.ByteArray, 1, 8)
+	if _, err := value.ReadFrom(bytes.NewReader([]byte{3, 1, 2, 3})); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(value, []byte{1, 2, 3}) {
+		t.Fatalf("decoded byte array = %v, want [1 2 3]", value)
+	}
+}
+
+func TestFixedBitSetReadFromRequiresAllBytes(t *testing.T) {
+	value := pk.NewFixedBitSet(16)
+	if n, err := value.ReadFrom(bytes.NewReader([]byte{0xff})); !errors.Is(err, io.ErrUnexpectedEOF) || n != 1 {
+		t.Fatalf("ReadFrom() = (%d, %v), want (1, unexpected EOF)", n, err)
+	}
+}
+
+func TestNewFixedBitSetRejectsImpossibleSize(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("NewFixedBitSet panicked: %v", recovered)
+		}
+	}()
+	if got := pk.NewFixedBitSet(math.MaxInt64); got != nil {
+		t.Fatalf("NewFixedBitSet(MaxInt64) allocated %d bytes, want nil", len(got))
+	}
+}
+
 func FuzzVarLong_Len(f *testing.F) {
 	for _, v := range VarLongs {
 		f.Add(int64(v))
@@ -134,6 +300,36 @@ func FuzzVarLong_Len(f *testing.F) {
 			t.Errorf("VarLong(%d) Length calculation error: calculated to be %d, actually %d", v, b, a)
 		}
 	})
+}
+
+func TestPositionRoundTrip(t *testing.T) {
+	tests := []pk.Position{
+		{},
+		{X: 12, Y: 64, Z: -4},
+		{X: -33_554_432, Y: -2_048, Z: -33_554_432},
+		{X: 33_554_431, Y: 2_047, Z: 33_554_431},
+	}
+
+	for _, want := range tests {
+		t.Run(fmt.Sprintf("%d_%d_%d", want.X, want.Y, want.Z), func(t *testing.T) {
+			var encoded bytes.Buffer
+			if n, err := want.WriteTo(&encoded); err != nil {
+				t.Fatalf("WriteTo() error = %v", err)
+			} else if n != 8 {
+				t.Fatalf("WriteTo() wrote %d bytes, want 8", n)
+			}
+
+			var got pk.Position
+			if n, err := got.ReadFrom(&encoded); err != nil {
+				t.Fatalf("ReadFrom() error = %v", err)
+			} else if n != 8 {
+				t.Fatalf("ReadFrom() read %d bytes, want 8", n)
+			}
+			if got != want {
+				t.Fatalf("round trip = %+v, want %+v", got, want)
+			}
+		})
+	}
 }
 
 func ExampleNBT() {

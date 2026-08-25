@@ -3,7 +3,7 @@ package component
 import (
 	"io"
 
-	pk "github.com/Tnze/go-mc/net/packet"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 var _ DataComponent = (*LodestoneTracker)(nil)
@@ -24,8 +24,13 @@ func (LodestoneTracker) ID() string {
 func (l *LodestoneTracker) ReadFrom(r io.Reader) (n int64, err error) {
 	return pk.Tuple{
 		&l.HasGlobalPosition,
-		&l.Dimension,
-		&l.Position,
+		pk.Opt{
+			Has: &l.HasGlobalPosition,
+			Field: pk.Tuple{
+				&l.Dimension,
+				&l.Position,
+			},
+		},
 		&l.Tracked,
 	}.ReadFrom(r)
 }
@@ -34,8 +39,13 @@ func (l *LodestoneTracker) ReadFrom(r io.Reader) (n int64, err error) {
 func (l *LodestoneTracker) WriteTo(w io.Writer) (n int64, err error) {
 	return pk.Tuple{
 		&l.HasGlobalPosition,
-		&l.Dimension,
-		&l.Position,
+		pk.Opt{
+			Has: &l.HasGlobalPosition,
+			Field: pk.Tuple{
+				&l.Dimension,
+				&l.Position,
+			},
+		},
 		&l.Tracked,
 	}.WriteTo(w)
 }

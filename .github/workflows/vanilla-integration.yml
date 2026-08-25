@@ -1,0 +1,267 @@
+name: Vanilla server enter-Play interoperability
+
+on:
+  push:
+    tags:
+      - "vanilla-test-*"
+  schedule:
+    - cron: "23 3 1 * *"
+  workflow_dispatch:
+    inputs:
+      accept_eula:
+        description: I have read and accept the Minecraft EULA for this integration run
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eula-gate:
+    name: Check explicit EULA gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      accepted: ${{ steps.gate.outputs.accepted }}
+    steps:
+      - name: Evaluate acceptance signal
+        id: gate
+        shell: bash
+        env:
+          DISPATCH_ACCEPTED: ${{ inputs.accept_eula }}
+          REPOSITORY_ACCEPTED: ${{ vars.MINECRAFT_EULA_ACCEPTED }}
+        run: |
+          if [[ "${DISPATCH_ACCEPTED}" == "true" || "${REPOSITORY_ACCEPTED}" == "true" ]]; then
+            echo "accepted=true" >> "${GITHUB_OUTPUT}"
+            echo "Minecraft EULA acceptance was explicitly supplied; vanilla tests may run."
+          else
+            echo "accepted=false" >> "${GITHUB_OUTPUT}"
+            echo "Vanilla tests are disabled. Manually check accept_eula or set MINECRAFT_EULA_ACCEPTED=true."
+          fi
+
+  vanilla-interoperability:
+    name: Minecraft ${{ matrix.version }} / Java ${{ matrix.java }}
+    needs: eula-gate
+    if: needs.eula-gate.outputs.accepted == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          # Latest stable patch in each catalogue major with an official
+          # Mojang server download. Java versions come from version metadata;
+          # 1.6.4 is the sole explicit Java 8 fallback because that field is absent.
+          # 1.7.2 is retained alongside 1.7.10 to exercise both Netty protocol
+          # profiles (4 and 5) in the 1.7 release line.
+          - version: "1.2.5"
+            java: "8"
+          - version: "1.3.2"
+            java: "8"
+          - version: "1.4.7"
+            java: "8"
+          - version: "1.5.2"
+            java: "8"
+          - version: "1.6.4"
+            java: "8"
+          - version: "1.7.2"
+            java: "8"
+          - version: "1.7.10"
+            java: "8"
+          - version: "1.8.9"
+            java: "8"
+          - version: "1.9.4"
+            java: "8"
+          - version: "1.10.2"
+            java: "8"
+          - version: "1.11.2"
+            java: "8"
+          - version: "1.12.2"
+            java: "8"
+          - version: "1.13.2"
+            java: "8"
+          - version: "1.14.4"
+            java: "8"
+          - version: "1.15.2"
+            java: "8"
+          - version: "1.16.5"
+            java: "8"
+          - version: "1.17.1"
+            java: "16"
+          - version: "1.18.2"
+            java: "17"
+          - version: "1.19.4"
+            java: "17"
+          - version: "1.20.6"
+            java: "21"
+          - version: "1.21.11"
+            java: "21"
+          - version: "26.1.2"
+            java: "25"
+          - version: "26.2"
+            java: "25"
+    env:
+      VERSION: ${{ matrix.version }}
+      JAVA_VERSION: ${{ matrix.java }}
+      MANIFEST_URL: https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up stable Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+
+      - name: Set up Java ${{ matrix.java }}
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Build interoperability verifier
+        run: go build -o vanilla-interop ./internal/vanillastatus
+
+      - name: Download and verify official server
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p vanilla
+          cd vanilla
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
+            --output version-manifest.json "${MANIFEST_URL}"
+
+          metadata_url="$(jq -er --arg version "${VERSION}" \
+            '.versions[] | select(.id == $version and .type == "release") | .url' \
+            version-manifest.json)"
+          metadata_sha1="$(jq -er --arg version "${VERSION}" \
+            '.versions[] | select(.id == $version and .type == "release") | .sha1' \
+            version-manifest.json)"
+          if [[ ! "${metadata_sha1}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid metadata SHA-1 in Mojang manifest for ${VERSION}."
+            exit 1
+          fi
+          case "${metadata_url}" in
+            https://piston-meta.mojang.com/*) ;;
+            *) echo "Refusing non-Mojang metadata URL: ${metadata_url}"; exit 1 ;;
+          esac
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
+            --output version.json "${metadata_url}"
+          printf '%s  %s\n' "${metadata_sha1}" version.json | sha1sum --check --strict -
+          jq -e --arg version "${VERSION}" '.id == $version && .type == "release"' version.json >/dev/null
+
+          server_url="$(jq -er '.downloads.server.url' version.json)"
+          server_sha1="$(jq -er '.downloads.server.sha1' version.json)"
+          server_size="$(jq -er '.downloads.server.size' version.json)"
+          if [[ ! "${server_sha1}" =~ ^[0-9a-f]{40}$ || ! "${server_size}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid server digest or size in Mojang metadata for ${VERSION}."
+            exit 1
+          fi
+          case "${server_url}" in
+            https://launcher.mojang.com/*|https://piston-data.mojang.com/*) ;;
+            *) echo "Refusing non-Mojang server URL: ${server_url}"; exit 1 ;;
+          esac
+
+          metadata_java="$(jq -r '.javaVersion.majorVersion // empty' version.json)"
+          if [[ -n "${metadata_java}" && "${metadata_java}" != "${JAVA_VERSION}" ]]; then
+            echo "Mojang metadata requires Java ${metadata_java}; matrix selected Java ${JAVA_VERSION}."
+            exit 1
+          fi
+          if [[ -z "${metadata_java}" ]]; then
+            if [[ "${VERSION}" == "1.6.4" && "${JAVA_VERSION}" == "8" ]]; then
+              echo "Mojang metadata omits javaVersion for 1.6.4; using the documented Java 8 fallback."
+            else
+              echo "Mojang metadata has no Java version for ${VERSION}; no fallback is declared."
+              exit 1
+            fi
+          fi
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
+            --output server.jar "${server_url}"
+          printf '%s  %s\n' "${server_sha1}" server.jar | sha1sum --check --strict -
+          actual_size="$(stat --format='%s' server.jar)"
+          if [[ "${actual_size}" != "${server_size}" ]]; then
+            echo "Server size ${actual_size} does not match Mojang metadata ${server_size}."
+            exit 1
+          fi
+
+      - name: Record explicitly gated EULA acceptance
+        shell: bash
+        env:
+          EULA_ACCEPTED: ${{ needs.eula-gate.outputs.accepted }}
+        run: |
+          set -euo pipefail
+          if [[ "${EULA_ACCEPTED}" != "true" ]]; then
+            echo "Refusing to write eula=true without explicit acceptance."
+            exit 1
+          fi
+          printf 'eula=true\n' > vanilla/eula.txt
+
+      - name: Start vanilla server and verify interoperability
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > vanilla/server.properties <<'PROPERTIES'
+          server-ip=127.0.0.1
+          server-port=25565
+          online-mode=false
+          enable-code-of-conduct=false
+          max-players=1
+          view-distance=3
+          simulation-distance=3
+          generate-structures=false
+          spawn-animals=false
+          spawn-monsters=false
+          spawn-npcs=false
+          motd=go-mc vanilla enter-Play integration
+          PROPERTIES
+
+          pushd vanilla >/dev/null
+          java -Xms256M -Xmx1024M -jar server.jar nogui >server.log 2>&1 &
+          server_pid=$!
+          popd >/dev/null
+
+          cleanup() {
+            if kill -0 "${server_pid}" 2>/dev/null; then
+              kill "${server_pid}" 2>/dev/null || true
+              for _ in {1..10}; do
+                kill -0 "${server_pid}" 2>/dev/null || break
+                sleep 1
+              done
+              kill -9 "${server_pid}" 2>/dev/null || true
+            fi
+            wait "${server_pid}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          if ! ./vanilla-interop \
+            -version "${VERSION}" \
+            -address 127.0.0.1:25565 \
+            -timeout 3m \
+            -attempt-timeout 15s \
+            -retry-interval 1s; then
+            echo "Vanilla ${VERSION} failed status/enter-Play interoperability verification."
+            tail -n 200 vanilla/server.log || true
+            exit 1
+          fi
+
+      - name: Upload vanilla server diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vanilla-${{ matrix.version }}-diagnostics
+          path: |
+            vanilla/server.log
+            vanilla/server.properties
+            vanilla/version.json
+          if-no-files-found: warn
+          retention-days: 7
