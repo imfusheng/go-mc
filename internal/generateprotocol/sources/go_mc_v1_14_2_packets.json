@@ -1,0 +1,1216 @@
+{
+  "repository": "https://github.com/Tnze/go-mc",
+  "tag": "v1.14.2",
+  "commit": "ff7439c28ed8c36720363bec67879c980c880ba0c",
+  "protocol": 485,
+  "packetIDsBlobSHA1": "7ea34b3b361ee7c38e04bee524df0c43d7299de4",
+  "mcbotBlobSHA1": "9abf86668cd075187778d9f5affc93d62fe5b5d3",
+  "loginBlobSHA1": "731fb28802eda936624bef0e7fcc6325c4701193",
+  "matchingPacketIDTags": [
+    "v1.14.1",
+    "v1.14.3"
+  ],
+  "canonicalization": "sourceKind preserves the historical Go identifier; kind uses the matching semantic name shared by the pinned protocol-480 and protocol-490 schemas",
+  "packets": [
+    {
+      "state": "handshake",
+      "direction": "serverbound",
+      "kind": "set_protocol",
+      "id": 0,
+      "sourceKind": "Handshake packet ID",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "status",
+      "direction": "clientbound",
+      "kind": "server_info",
+      "id": 0,
+      "sourceKind": "server status response",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "status",
+      "direction": "clientbound",
+      "kind": "ping",
+      "id": 1,
+      "sourceKind": "pong response",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "status",
+      "direction": "serverbound",
+      "kind": "ping_start",
+      "id": 0,
+      "sourceKind": "server status request",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "status",
+      "direction": "serverbound",
+      "kind": "ping",
+      "id": 1,
+      "sourceKind": "ping request",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "login",
+      "direction": "clientbound",
+      "kind": "disconnect",
+      "id": 0,
+      "sourceKind": "Disconnect",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "login",
+      "direction": "clientbound",
+      "kind": "encryption_begin",
+      "id": 1,
+      "sourceKind": "Encryption Request",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "login",
+      "direction": "clientbound",
+      "kind": "success",
+      "id": 2,
+      "sourceKind": "Login Success",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "login",
+      "direction": "clientbound",
+      "kind": "compress",
+      "id": 3,
+      "sourceKind": "Set Compression",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "login",
+      "direction": "clientbound",
+      "kind": "login_plugin_request",
+      "id": 4,
+      "sourceKind": "Login Plugin Request",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "login",
+      "direction": "serverbound",
+      "kind": "login_start",
+      "id": 0,
+      "sourceKind": "LoginStart Packet",
+      "sourceRef": "bot/mcbot.go"
+    },
+    {
+      "state": "login",
+      "direction": "serverbound",
+      "kind": "encryption_begin",
+      "id": 1,
+      "sourceKind": "Encryption Key Response",
+      "sourceRef": "bot/login.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "spawn_entity",
+      "id": 0,
+      "sourceKind": "SpawnObject",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "spawn_entity_experience_orb",
+      "id": 1,
+      "sourceKind": "SpawnExperienceOrb",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "spawn_entity_weather",
+      "id": 2,
+      "sourceKind": "SpawnGlobalEntity",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "spawn_entity_living",
+      "id": 3,
+      "sourceKind": "SpawnMob",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "spawn_entity_painting",
+      "id": 4,
+      "sourceKind": "SpawnPainting",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "named_entity_spawn",
+      "id": 5,
+      "sourceKind": "SpawnPlayer",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "animation",
+      "id": 6,
+      "sourceKind": "AnimationClientbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "statistics",
+      "id": 7,
+      "sourceKind": "Statistics",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "block_break_animation",
+      "id": 8,
+      "sourceKind": "BlockBreakAnimation",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "tile_entity_data",
+      "id": 9,
+      "sourceKind": "UpdateBlockEntity",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "block_action",
+      "id": 10,
+      "sourceKind": "BlockAction",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "block_change",
+      "id": 11,
+      "sourceKind": "BlockChange",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "boss_bar",
+      "id": 12,
+      "sourceKind": "BossBar",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "difficulty",
+      "id": 13,
+      "sourceKind": "ServerDifficulty",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "chat",
+      "id": 14,
+      "sourceKind": "ChatMessageClientbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "multi_block_change",
+      "id": 15,
+      "sourceKind": "MultiBlockChange",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "tab_complete",
+      "id": 16,
+      "sourceKind": "TabComplete",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "declare_commands",
+      "id": 17,
+      "sourceKind": "DeclareCommands",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "transaction",
+      "id": 18,
+      "sourceKind": "ConfirmTransaction",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "close_window",
+      "id": 19,
+      "sourceKind": "CloseWindow",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "window_items",
+      "id": 20,
+      "sourceKind": "WindowItems",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "craft_progress_bar",
+      "id": 21,
+      "sourceKind": "WindowProperty",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "set_slot",
+      "id": 22,
+      "sourceKind": "SetSlot",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "set_cooldown",
+      "id": 23,
+      "sourceKind": "SetCooldown",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "custom_payload",
+      "id": 24,
+      "sourceKind": "PluginMessageClientbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "named_sound_effect",
+      "id": 25,
+      "sourceKind": "NamedSoundEffect",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "kick_disconnect",
+      "id": 26,
+      "sourceKind": "DisconnectPlay",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_status",
+      "id": 27,
+      "sourceKind": "EntityStatus",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "explosion",
+      "id": 28,
+      "sourceKind": "Explosion",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "unload_chunk",
+      "id": 29,
+      "sourceKind": "UnloadChunk",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "game_state_change",
+      "id": 30,
+      "sourceKind": "ChangeGameState",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "open_horse_window",
+      "id": 31,
+      "sourceKind": "OpenHorseWindow",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "keep_alive",
+      "id": 32,
+      "sourceKind": "KeepAliveClientbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "map_chunk",
+      "id": 33,
+      "sourceKind": "ChunkData",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "world_event",
+      "id": 34,
+      "sourceKind": "Effect",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "world_particles",
+      "id": 35,
+      "sourceKind": "Particle",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "update_light",
+      "id": 36,
+      "sourceKind": "UpdateLight",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "login",
+      "id": 37,
+      "sourceKind": "JoinGame",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "map",
+      "id": 38,
+      "sourceKind": "MapData",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "trade_list",
+      "id": 39,
+      "sourceKind": "TradeList",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "rel_entity_move",
+      "id": 40,
+      "sourceKind": "EntityRelativeMove",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_move_look",
+      "id": 41,
+      "sourceKind": "EntityLookAndRelativeMove",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_look",
+      "id": 42,
+      "sourceKind": "EntityLook",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity",
+      "id": 43,
+      "sourceKind": "Entity",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "vehicle_move",
+      "id": 44,
+      "sourceKind": "VehicleMoveClientbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "open_book",
+      "id": 45,
+      "sourceKind": "OpenBook",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "open_window",
+      "id": 46,
+      "sourceKind": "OpenWindow",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "open_sign_entity",
+      "id": 47,
+      "sourceKind": "OpenSignEditor",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "craft_recipe_response",
+      "id": 48,
+      "sourceKind": "CraftRecipeResponse",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "abilities",
+      "id": 49,
+      "sourceKind": "PlayerAbilitiesClientbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "combat_event",
+      "id": 50,
+      "sourceKind": "CombatEvent",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "player_info",
+      "id": 51,
+      "sourceKind": "PlayerInfo",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "face_player",
+      "id": 52,
+      "sourceKind": "FacePlayer",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "position",
+      "id": 53,
+      "sourceKind": "PlayerPositionAndLookClientbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "unlock_recipes",
+      "id": 54,
+      "sourceKind": "UnlockRecipes",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_destroy",
+      "id": 55,
+      "sourceKind": "DestroyEntities",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "remove_entity_effect",
+      "id": 56,
+      "sourceKind": "RemoveEntityEffect",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "resource_pack_send",
+      "id": 57,
+      "sourceKind": "ResourcePackSend",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "respawn",
+      "id": 58,
+      "sourceKind": "Respawn",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_head_rotation",
+      "id": 59,
+      "sourceKind": "EntityHeadLook",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "select_advancement_tab",
+      "id": 60,
+      "sourceKind": "SelectAdvancementTab",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "world_border",
+      "id": 61,
+      "sourceKind": "WorldBorder",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "camera",
+      "id": 62,
+      "sourceKind": "Camera",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "held_item_slot",
+      "id": 63,
+      "sourceKind": "HeldItemChangeClientbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "update_view_position",
+      "id": 64,
+      "sourceKind": "UpdateViewPosition",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "update_view_distance",
+      "id": 65,
+      "sourceKind": "UpdateViewDistance",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "scoreboard_display_objective",
+      "id": 66,
+      "sourceKind": "DisplayScoreboard",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_metadata",
+      "id": 67,
+      "sourceKind": "EntityMetadata",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "attach_entity",
+      "id": 68,
+      "sourceKind": "AttachEntity",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_velocity",
+      "id": 69,
+      "sourceKind": "EntityVelocity",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_equipment",
+      "id": 70,
+      "sourceKind": "EntityEquipment",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "experience",
+      "id": 71,
+      "sourceKind": "SetExperience",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "update_health",
+      "id": 72,
+      "sourceKind": "UpdateHealth",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "scoreboard_objective",
+      "id": 73,
+      "sourceKind": "ScoreboardObjective",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "set_passengers",
+      "id": 74,
+      "sourceKind": "SetPassengers",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "teams",
+      "id": 75,
+      "sourceKind": "Teams",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "scoreboard_score",
+      "id": 76,
+      "sourceKind": "UpdateScore",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "spawn_position",
+      "id": 77,
+      "sourceKind": "SpawnPosition",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "update_time",
+      "id": 78,
+      "sourceKind": "TimeUpdate",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "title",
+      "id": 79,
+      "sourceKind": "Title",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_sound_effect",
+      "id": 80,
+      "sourceKind": "EntitySoundEffect",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "sound_effect",
+      "id": 81,
+      "sourceKind": "SoundEffect",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "stop_sound",
+      "id": 82,
+      "sourceKind": "StopSound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "playerlist_header",
+      "id": 83,
+      "sourceKind": "PlayerListHeaderAndFooter",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "nbt_query_response",
+      "id": 84,
+      "sourceKind": "NBTQueryResponse",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "collect",
+      "id": 85,
+      "sourceKind": "CollectItem",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_teleport",
+      "id": 86,
+      "sourceKind": "EntityTeleport",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "advancements",
+      "id": 87,
+      "sourceKind": "Advancements",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_update_attributes",
+      "id": 88,
+      "sourceKind": "EntityProperties",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "entity_effect",
+      "id": 89,
+      "sourceKind": "EntityEffect",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "declare_recipes",
+      "id": 90,
+      "sourceKind": "DeclareRecipes",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "clientbound",
+      "kind": "tags",
+      "id": 91,
+      "sourceKind": "Tags",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "teleport_confirm",
+      "id": 0,
+      "sourceKind": "TeleportConfirm",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "query_block_nbt",
+      "id": 1,
+      "sourceKind": "QueryBlockNBT",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "set_difficulty",
+      "id": 2,
+      "sourceKind": "SetDifficulty",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "chat",
+      "id": 3,
+      "sourceKind": "ChatMessageServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "client_command",
+      "id": 4,
+      "sourceKind": "ClientStatus",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "settings",
+      "id": 5,
+      "sourceKind": "ClientSettings",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "tab_complete",
+      "id": 6,
+      "sourceKind": "TabCompleteServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "transaction",
+      "id": 7,
+      "sourceKind": "ConfirmTransactionServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "enchant_item",
+      "id": 8,
+      "sourceKind": "ClickWindowButton",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "window_click",
+      "id": 9,
+      "sourceKind": "ClickWindow",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "close_window",
+      "id": 10,
+      "sourceKind": "CloseWindowServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "custom_payload",
+      "id": 11,
+      "sourceKind": "PluginMessageServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "edit_book",
+      "id": 12,
+      "sourceKind": "EditBook",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "query_entity_nbt",
+      "id": 13,
+      "sourceKind": "QueryEntityNBT",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "use_entity",
+      "id": 14,
+      "sourceKind": "UseEntity",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "keep_alive",
+      "id": 15,
+      "sourceKind": "KeepAliveServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "lock_difficulty",
+      "id": 16,
+      "sourceKind": "LockDifficulty",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "position",
+      "id": 17,
+      "sourceKind": "PlayerPosition",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "position_look",
+      "id": 18,
+      "sourceKind": "PlayerPositionAndLookServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "look",
+      "id": 19,
+      "sourceKind": "PlayerLook",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "flying",
+      "id": 20,
+      "sourceKind": "Player",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "vehicle_move",
+      "id": 21,
+      "sourceKind": "VehicleMoveServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "steer_boat",
+      "id": 22,
+      "sourceKind": "SteerBoat",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "pick_item",
+      "id": 23,
+      "sourceKind": "PickItem",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "craft_recipe_request",
+      "id": 24,
+      "sourceKind": "CraftRecipeRequest",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "abilities",
+      "id": 25,
+      "sourceKind": "PlayerAbilitiesServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "block_dig",
+      "id": 26,
+      "sourceKind": "PlayerDigging",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "entity_action",
+      "id": 27,
+      "sourceKind": "EntityAction",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "steer_vehicle",
+      "id": 28,
+      "sourceKind": "SteerVehicle",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "crafting_book_data",
+      "id": 29,
+      "sourceKind": "RecipeBookData",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "name_item",
+      "id": 30,
+      "sourceKind": "NameItem",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "resource_pack_receive",
+      "id": 31,
+      "sourceKind": "ResourcePackStatus",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "advancement_tab",
+      "id": 32,
+      "sourceKind": "AdvancementTab",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "select_trade",
+      "id": 33,
+      "sourceKind": "SelectTrade",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "set_beacon_effect",
+      "id": 34,
+      "sourceKind": "SetBeaconEffect",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "held_item_slot",
+      "id": 35,
+      "sourceKind": "HeldItemChangeServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "update_command_block",
+      "id": 36,
+      "sourceKind": "UpdateCommandBlock",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "update_command_block_minecart",
+      "id": 37,
+      "sourceKind": "UpdateCommandBlockMinecart",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "set_creative_slot",
+      "id": 38,
+      "sourceKind": "CreativeInventoryAction",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "update_jigsaw_block",
+      "id": 39,
+      "sourceKind": "UpdateJigsawBlock",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "update_structure_block",
+      "id": 40,
+      "sourceKind": "UpdateStructureBlock",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "update_sign",
+      "id": 41,
+      "sourceKind": "UpdateSign",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "arm_animation",
+      "id": 42,
+      "sourceKind": "AnimationServerbound",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "spectate",
+      "id": 43,
+      "sourceKind": "Spectate",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "block_place",
+      "id": 44,
+      "sourceKind": "PlayerBlockPlacement",
+      "sourceRef": "data/packetIDs.go"
+    },
+    {
+      "state": "play",
+      "direction": "serverbound",
+      "kind": "use_item",
+      "id": 45,
+      "sourceKind": "UseItem",
+      "sourceRef": "data/packetIDs.go"
+    }
+  ]
+}

@@ -2,14 +2,15 @@ package bot
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/data/packetid"
-	"github.com/Tnze/go-mc/net"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/chat"
+	"github.com/imfusheng/go-mc/nbt"
+	"github.com/imfusheng/go-mc/net"
+	pk "github.com/imfusheng/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/protocol"
+	"github.com/imfusheng/go-mc/registry"
 )
 
 type ConfigHandler interface {
@@ -30,6 +31,63 @@ type ResourcePack struct {
 	PromptMessage *chat.Message // Optional
 }
 
+// ConfigurationSettings is encoded as the Configuration-state Client
+// Information packet introduced in Minecraft 1.20.2. ParticleStatus is sent
+// only by protocol 768 and later.
+type ConfigurationSettings struct {
+	Locale              string
+	ViewDistance        int8
+	ChatMode            int32
+	ChatColors          bool
+	DisplayedSkinParts  uint8
+	MainHand            int32
+	EnableTextFiltering bool
+	AllowServerListings bool
+	ParticleStatus      int32
+}
+
+// DefaultConfigurationSettings is a conservative vanilla-like client
+// configuration. Copy it before changing fields.
+var DefaultConfigurationSettings = ConfigurationSettings{
+	Locale:              "en_us",
+	ViewDistance:        8,
+	ChatMode:            0,
+	ChatColors:          true,
+	DisplayedSkinParts:  0x7f,
+	MainHand:            1,
+	EnableTextFiltering: false,
+	AllowServerListings: true,
+	ParticleStatus:      0,
+}
+
+// CodeOfConductHandler decides whether the client explicitly accepts text
+// presented by the server. Returning false leaves the connection without
+// sending an acceptance packet.
+type CodeOfConductHandler func(text string) bool
+
+// ConsentRequiredError reports a code of conduct that requires an explicit
+// application decision. It is returned when CodeOfConduct is nil or rejects
+// the text.
+type ConsentRequiredError struct {
+	Text string
+}
+
+func (e *ConsentRequiredError) Error() string {
+	return "bot: server code of conduct requires explicit consent"
+}
+
+// TransferError reports that the server requested a new connection. The
+// current connection cannot continue into Play and callers may reconnect to
+// Host:Port after applying their own trust policy.
+type TransferError struct {
+	Host string
+	Port int32
+}
+
+func (e *TransferError) Error() string {
+	return fmt.Sprintf("bot: server requested transfer to %s:%d", e.Host, e.Port)
+}
+
 type ConfigErr struct {
 	Stage string
 	Err   error
@@ -43,23 +101,81 @@ func (l ConfigErr) Unwrap() error {
 	return l.Err
 }
 
-func (c *Client) joinConfiguration(conn *net.Conn) error {
+func (c *Client) joinConfiguration(conn *net.Conn, profile *protocol.Profile) (err error) {
+	if c == nil {
+		return ConfigErr{"initialize", fmt.Errorf("nil client")}
+	}
+	if conn == nil {
+		return ConfigErr{"initialize", fmt.Errorf("nil connection")}
+	}
+	if profile == nil {
+		_, mappingErr := protocol.RequirePacketID(nil, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigFinish)
+		return ConfigErr{"initialize", mappingErr}
+	}
+	if _, mappingErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Clientbound, protocol.PacketConfigFinish); mappingErr != nil {
+		return ConfigErr{"initialize", mappingErr}
+	}
+	if c.Cookies == nil {
+		c.Cookies = make(map[string][]byte)
+	}
+	if c.UnknownRegistries == nil {
+		c.UnknownRegistries = make(map[string]*registry.Registry[nbt.RawMessage])
+	}
+	if c.CustomReportDetails == nil {
+		c.CustomReportDetails = make(map[string]string)
+	}
+	if c.ConfigHandler == nil {
+		c.ConfigHandler = NewDefaultConfigHandler()
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = ConfigErr{"decode packet", fmt.Errorf("malformed configuration packet: %v", recovered)}
+		}
+	}()
+
+	settings := DefaultConfigurationSettings
+	if c.ConfigurationSettings != nil {
+		settings = *c.ConfigurationSettings
+	}
+	if err := settings.validate(profile); err != nil {
+		return ConfigErr{"client information", err}
+	}
+	settingsID, mappingErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigSettings)
+	if mappingErr != nil {
+		return ConfigErr{"client information", mappingErr}
+	}
+	if err := conn.WritePacket(pk.Marshal(settingsID, settings.fields(profile)...)); err != nil {
+		return ConfigErr{"client information", err}
+	}
+
 	for {
 		var p pk.Packet
 		if err := conn.ReadPacket(&p); err != nil {
 			return ConfigErr{"config custom payload", err}
 		}
 
-		switch packetid.ClientboundPacketID(p.ID) {
-		case packetid.ClientboundConfigCookieRequest:
+		kind, resolveErr := protocol.RequirePacketKind(profile, protocol.StateConfiguration, protocol.Clientbound, p.ID)
+		if resolveErr != nil {
+			return ConfigErr{"packet", resolveErr}
+		}
+
+		switch kind {
+		case protocol.PacketConfigCookieRequest:
 			var key pk.Identifier
-			err := p.Scan(&key)
+			err := scanConfigurationPacket(p, &key)
 			if err != nil {
 				return ConfigErr{"cookie request", err}
 			}
 			cookieContent := c.Cookies[string(key)]
+			if len(cookieContent) > maxCookiePayloadBytes {
+				return ConfigErr{"cookie response", fmt.Errorf("cookie %q payload is %d bytes (maximum %d)", key, len(cookieContent), maxCookiePayloadBytes)}
+			}
+			responseID, resolveErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigCookieResponse)
+			if resolveErr != nil {
+				return ConfigErr{"cookie response", resolveErr}
+			}
 			err = conn.WritePacket(pk.Marshal(
-				packetid.ServerboundConfigCookieResponse,
+				responseID,
 				key, pk.OptionEncoder[pk.ByteArray]{
 					Has: cookieContent != nil,
 					Val: pk.ByteArray(cookieContent),
@@ -69,10 +185,10 @@ func (c *Client) joinConfiguration(conn *net.Conn) error {
 				return ConfigErr{"cookie response", err}
 			}
 
-		case packetid.ClientboundConfigCustomPayload:
+		case protocol.PacketConfigCustomPayload:
 			var channel pk.Identifier
 			var data pk.PluginMessageData
-			err := p.Scan(&channel, &data)
+			err := scanConfigurationPacket(p, &channel, &data)
 			if err != nil {
 				return ConfigErr{"custom payload", err}
 			}
@@ -87,59 +203,90 @@ func (c *Client) joinConfiguration(conn *net.Conn) error {
 			// And the custome payload packet seems to be same in config stage and play stage.
 			// How do we provide API for that?
 
-		case packetid.ClientboundConfigDisconnect:
+		case protocol.PacketConfigDisconnect:
 			const ErrStage = "disconnect"
 			var reason chat.Message
-			err := p.Scan(&reason)
+			var err error
+			if profile.Key().Protocol == 764 {
+				var jsonReason chat.JsonMessage
+				err = scanConfigurationPacket(p, &jsonReason)
+				reason = chat.Message(jsonReason)
+			} else {
+				err = scanConfigurationPacket(p, &reason)
+			}
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
 			return ConfigErr{ErrStage, DisconnectErr(reason)}
 
-		case packetid.ClientboundConfigFinishConfiguration:
-			err := conn.WritePacket(pk.Marshal(
-				packetid.ServerboundConfigFinishConfiguration,
-			))
+		case protocol.PacketConfigFinish:
+			if err := requireEmptyConfigurationPacket(p); err != nil {
+				return ConfigErr{"finish config", err}
+			}
+			finishID, resolveErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigFinish)
+			if resolveErr != nil {
+				return ConfigErr{"finish config", resolveErr}
+			}
+			err := conn.WritePacket(pk.Marshal(finishID))
 			if err != nil {
 				return ConfigErr{"finish config", err}
 			}
 			return nil
 
-		case packetid.ClientboundConfigKeepAlive:
+		case protocol.PacketConfigKeepAlive:
 			const ErrStage = "keep alive"
 			var keepAliveID pk.Long
-			err := p.Scan(&keepAliveID)
+			err := scanConfigurationPacket(p, &keepAliveID)
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
 			// send it back
+			responseID, resolveErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigKeepAlive)
+			if resolveErr != nil {
+				return ConfigErr{ErrStage, resolveErr}
+			}
 			err = conn.WritePacket(pk.Marshal(
-				packetid.ServerboundConfigKeepAlive,
+				responseID,
 				keepAliveID,
 			))
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
 
-		case packetid.ClientboundConfigPing:
+		case protocol.PacketConfigPing:
 			var pingID pk.Int
-			err := p.Scan(&pingID)
+			err := scanConfigurationPacket(p, &pingID)
 			if err != nil {
 				return ConfigErr{"ping", err}
 			}
 			// send it back
+			responseID, resolveErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigPong)
+			if resolveErr != nil {
+				return ConfigErr{"pong", resolveErr}
+			}
 			err = conn.WritePacket(pk.Marshal(
-				packetid.ServerboundConfigPong,
+				responseID,
 				pingID,
 			))
 			if err != nil {
 				return ConfigErr{"pong", err}
 			}
 
-		case packetid.ClientboundConfigResetChat:
-			// TODO
+		case protocol.PacketConfigResetChat:
+			if profile.Key().Protocol == 767 {
+				if err := requireEmptyConfigurationPacket(p); err != nil {
+					return ConfigErr{"reset chat", err}
+				}
+			}
 
-		case packetid.ClientboundConfigRegistryData:
+		case protocol.PacketConfigRegistryData:
+			// Registry payloads have changed repeatedly since Configuration was
+			// introduced. Keep the existing audited p767 decoder; other profiles
+			// can safely skip this complete framed packet while still answering
+			// every packet that gates entry to Play.
+			if profile.Key().Protocol != 767 {
+				continue
+			}
 			const ErrStage = "registry"
 			var registryID pk.Identifier
 
@@ -148,30 +295,74 @@ func (c *Client) joinConfiguration(conn *net.Conn) error {
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
-
-			registry := c.Registries.Registry(string(registryID))
-			if registry == nil {
-				return ConfigErr{ErrStage, errors.New("unknown registry: " + string(registryID))}
+			if err := validateNextConfigCount(r, "registry entry", registry.MaxNetworkRegistryEntries); err != nil {
+				return ConfigErr{ErrStage, err}
 			}
 
-			_, err = registry.ReadFrom(r)
+			codec := c.Registries.Registry(string(registryID))
+			if codec == nil {
+				unknown := registry.NewRegistry[nbt.RawMessage]()
+				_, err = unknown.ReadFrom(r)
+				if err != nil {
+					return ConfigErr{ErrStage, fmt.Errorf("failed to read unknown registry %s: %w", registryID, err)}
+				}
+				if r.Len() != 0 {
+					return ConfigErr{ErrStage, fmt.Errorf("unknown registry %s contains %d trailing bytes", registryID, r.Len())}
+				}
+				c.UnknownRegistries[string(registryID)] = &unknown
+				continue
+			}
+
+			_, err = codec.ReadFrom(r)
 			if err != nil {
 				return ConfigErr{ErrStage, fmt.Errorf("failed to read registry %s: %w", registryID, err)}
 			}
+			if r.Len() != 0 {
+				return ConfigErr{ErrStage, fmt.Errorf("registry %s contains %d trailing bytes", registryID, r.Len())}
+			}
 
-		case packetid.ClientboundConfigResourcePackPop:
+		case protocol.PacketConfigResourcePackSend:
+			var url, hash pk.String
+			var forced pk.Boolean
+			var prompt pk.Option[chat.JsonMessage, *chat.JsonMessage]
+			if err := scanConfigurationPacket(p, &url, &hash, &forced, &prompt); err != nil {
+				return ConfigErr{"resource pack", err}
+			}
+			res := ResourcePack{
+				URL:    string(url),
+				Hash:   string(hash),
+				Forced: bool(forced),
+			}
+			if prompt.Has {
+				message := chat.Message(prompt.Val)
+				res.PromptMessage = &message
+			}
+			c.ConfigHandler.PushResourcePack(res)
+			if err := writeResourcePackDeclined(conn, profile, nil); err != nil {
+				return ConfigErr{"resource pack response", err}
+			}
+
+		case protocol.PacketConfigResourcePackPop:
+			if profile.Key().Protocol != 767 {
+				continue
+			}
 			var id pk.Option[pk.UUID, *pk.UUID]
-			err := p.Scan(&id)
+			err := scanConfigurationPacket(p, &id)
 			if err != nil {
 				return ConfigErr{"resource pack pop", err}
 			}
+			if id.Has {
+				c.ConfigHandler.PopResourcePack(id.Val)
+			} else {
+				c.ConfigHandler.PopAllResourcePack()
+			}
 
-		case packetid.ClientboundConfigResourcePackPush:
+		case protocol.PacketConfigResourcePackPush:
 			var id pk.UUID
 			var Url, Hash pk.String
 			var Forced pk.Boolean
 			var PromptMessage pk.Option[chat.Message, *chat.Message]
-			err := p.Scan(
+			err := scanConfigurationPacket(p,
 				&id,
 				&Url,
 				&Hash,
@@ -191,41 +382,58 @@ func (c *Client) joinConfiguration(conn *net.Conn) error {
 				res.PromptMessage = &PromptMessage.Val
 			}
 			c.ConfigHandler.PushResourcePack(res)
+			if err := writeResourcePackDeclined(conn, profile, &id); err != nil {
+				return ConfigErr{"resource pack response", err}
+			}
 
-		case packetid.ClientboundConfigStoreCookie:
+		case protocol.PacketConfigStoreCookie:
 			var key pk.Identifier
 			var payload pk.ByteArray
-			err := p.Scan(&key, &payload)
+			err := scanConfigurationPacket(p, &key, &payload)
 			if err != nil {
 				return ConfigErr{"store cookie", err}
 			}
+			if len(payload) > maxCookiePayloadBytes {
+				return ConfigErr{"store cookie", fmt.Errorf("cookie %q payload is %d bytes (maximum %d)", key, len(payload), maxCookiePayloadBytes)}
+			}
 			c.Cookies[string(key)] = []byte(payload)
 
-		case packetid.ClientboundConfigTransfer:
+		case protocol.PacketConfigTransfer:
 			var host pk.String
 			var port pk.VarInt
-			err := p.Scan(&host, &port)
+			err := scanConfigurationPacket(p, &host, &port)
 			if err != nil {
 				return ConfigErr{"transfer", err}
 			}
-			// TODO: trnasfer to the specific server
-			// How does it work? Just connect the new server, and re-start at handshake?
+			if port <= 0 || port > 65535 {
+				return ConfigErr{"transfer", fmt.Errorf("invalid transfer port %d", port)}
+			}
+			return ConfigErr{"transfer", &TransferError{Host: string(host), Port: int32(port)}}
 
-		case packetid.ClientboundConfigUpdateEnabledFeatures:
+		case protocol.PacketConfigFeatureFlags:
+			if profile.Key().Protocol != 767 {
+				continue
+			}
 			features := []pk.Identifier{}
-			err := p.Scan(pk.Array(&features))
+			err := scanConfigurationPacket(p, pk.Array(&features))
 			if err != nil {
 				return ConfigErr{"update enabled features", err}
 			}
 			c.ConfigHandler.EnableFeature(features)
 
-		case packetid.ClientboundConfigUpdateTags:
+		case protocol.PacketConfigTags:
+			if profile.Key().Protocol != 767 {
+				continue
+			}
 			const ErrStage = "update tags"
 			r := bytes.NewReader(p.Data)
 
 			var length pk.VarInt
 			_, err := length.ReadFrom(r)
 			if err != nil {
+				return ConfigErr{ErrStage, err}
+			}
+			if err := validateConfigCount(length, "tag registry", MaxConfigurationTagRegistries); err != nil {
 				return ConfigErr{ErrStage, err}
 			}
 
@@ -252,30 +460,46 @@ func (c *Client) joinConfiguration(conn *net.Conn) error {
 					return ConfigErr{ErrStage, err}
 				}
 			}
+			if r.Len() != 0 {
+				return ConfigErr{ErrStage, fmt.Errorf("tag packet contains %d trailing bytes", r.Len())}
+			}
 
-		case packetid.ClientboundConfigSelectKnownPacks:
+		case protocol.PacketConfigSelectKnownPacks:
 			const ErrStage = "select known packs"
 			packs := []DataPack{}
-			err := p.Scan(pk.Array(&packs))
+			err := scanConfigurationPacket(p, pk.ArrayWithLimit(&packs, MaxConfigurationKnownPacks))
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
-			knwonPacks := c.ConfigHandler.SelectDataPacks(packs)
+			knownPacks := c.ConfigHandler.SelectDataPacks(packs)
+			if len(knownPacks) > MaxConfigurationKnownPacks {
+				return ConfigErr{ErrStage, fmt.Errorf("selected known pack count %d exceeds maximum %d", len(knownPacks), MaxConfigurationKnownPacks)}
+			}
+			responseID, resolveErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigSelectKnownPacks)
+			if resolveErr != nil {
+				return ConfigErr{ErrStage, resolveErr}
+			}
 			err = conn.WritePacket(pk.Marshal(
-				packetid.ServerboundConfigSelectKnownPacks,
-				pk.Array(knwonPacks),
+				responseID,
+				pk.ArrayWithLimit(knownPacks, MaxConfigurationKnownPacks),
 			))
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
 
-		case packetid.ClientboundConfigCustomReportDetails:
+		case protocol.PacketConfigCustomReportDetails:
+			if profile.Key().Protocol != 767 {
+				continue
+			}
 			const ErrStage = "custom report details"
 			var length pk.VarInt
 			var title, description pk.String
 			r := bytes.NewReader(p.Data)
 			_, err := length.ReadFrom(r)
 			if err != nil {
+				return ConfigErr{ErrStage, err}
+			}
+			if err := validateConfigCount(length, "custom report detail", maxConfigurationEntries); err != nil {
 				return ConfigErr{ErrStage, err}
 			}
 			for i := 0; i < int(length); i++ {
@@ -289,11 +513,152 @@ func (c *Client) joinConfiguration(conn *net.Conn) error {
 				}
 				c.CustomReportDetails[string(title)] = string(description)
 			}
+			if r.Len() != 0 {
+				return ConfigErr{ErrStage, fmt.Errorf("custom report details contain %d trailing bytes", r.Len())}
+			}
 
-		case packetid.ClientboundConfigServerLinks:
+		case protocol.PacketConfigServerLinks:
 			// TODO
+
+		case protocol.PacketConfigCodeOfConduct:
+			var text pk.String
+			if err := scanConfigurationPacket(p, &text); err != nil {
+				return ConfigErr{"code of conduct", err}
+			}
+			if c.CodeOfConduct == nil || !c.CodeOfConduct(string(text)) {
+				return ConfigErr{"code of conduct", &ConsentRequiredError{Text: string(text)}}
+			}
+			acceptID, resolveErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigAcceptCodeOfConduct)
+			if resolveErr != nil {
+				return ConfigErr{"code of conduct", resolveErr}
+			}
+			if err := conn.WritePacket(pk.Marshal(acceptID)); err != nil {
+				return ConfigErr{"code of conduct", err}
+			}
+
+		default:
+			if profile.Key().Protocol == 767 {
+				return ConfigErr{"packet", fmt.Errorf("unexpected clientbound configuration packet %q (%#02x)", kind, p.ID)}
+			}
+			// Packet framing has already isolated the complete payload, so an
+			// audited non-lifecycle packet can be skipped without desynchronizing
+			// the stream. Required request/response packets are all handled above.
+			continue
 		}
 	}
+}
+
+const (
+	// MaxConfigurationKnownPacks bounds the Select Known Packs object array.
+	// A pack contains three strings, so the generic packet byte limit is not a
+	// safe element-count limit for allocation.
+	MaxConfigurationKnownPacks = 1 << 10
+	// MaxConfigurationTagRegistries bounds registry groups in Update Tags.
+	MaxConfigurationTagRegistries = 1 << 10
+
+	maxConfigurationEntries = 1 << 16
+	maxCookiePayloadBytes   = 5120
+	resourcePackDeclined    = 1
+)
+
+func (s ConfigurationSettings) validate(profile *protocol.Profile) error {
+	if profile == nil || !profile.HasConfigurationState() {
+		return fmt.Errorf("configuration settings require a configuration-state profile")
+	}
+	if len(s.Locale) == 0 || len(s.Locale) > 16 {
+		return fmt.Errorf("locale byte length %d is outside range 1..16", len(s.Locale))
+	}
+	if s.ChatMode < 0 || s.ChatMode > 2 {
+		return fmt.Errorf("chat mode %d is outside range 0..2", s.ChatMode)
+	}
+	if s.MainHand < 0 || s.MainHand > 1 {
+		return fmt.Errorf("main hand %d is outside range 0..1", s.MainHand)
+	}
+	if profile.Key().Protocol >= 768 && (s.ParticleStatus < 0 || s.ParticleStatus > 2) {
+		return fmt.Errorf("particle status %d is outside range 0..2", s.ParticleStatus)
+	}
+	return nil
+}
+
+func (s ConfigurationSettings) fields(profile *protocol.Profile) []pk.FieldEncoder {
+	fields := []pk.FieldEncoder{
+		pk.String(s.Locale),
+		pk.Byte(s.ViewDistance),
+		pk.VarInt(s.ChatMode),
+		pk.Boolean(s.ChatColors),
+		pk.UnsignedByte(s.DisplayedSkinParts),
+		pk.VarInt(s.MainHand),
+		pk.Boolean(s.EnableTextFiltering),
+		pk.Boolean(s.AllowServerListings),
+	}
+	if profile != nil && profile.Key().Protocol >= 768 {
+		fields = append(fields, pk.VarInt(s.ParticleStatus))
+	}
+	return fields
+}
+
+func scanConfigurationPacket(p pk.Packet, fields ...pk.FieldDecoder) error {
+	r := bytes.NewReader(p.Data)
+	for i, field := range fields {
+		if field == nil {
+			return fmt.Errorf("configuration field %d is nil", i)
+		}
+		if _, err := field.ReadFrom(r); err != nil {
+			return fmt.Errorf("configuration field %d: %w", i, err)
+		}
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("configuration packet contains %d trailing bytes", r.Len())
+	}
+	return nil
+}
+
+func requireEmptyConfigurationPacket(p pk.Packet) error {
+	if len(p.Data) != 0 {
+		return fmt.Errorf("configuration packet contains %d trailing bytes", len(p.Data))
+	}
+	return nil
+}
+
+func writeResourcePackDeclined(conn *net.Conn, profile *protocol.Profile, id *pk.UUID) error {
+	responseID, err := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigResourcePackResponse)
+	if err != nil {
+		return err
+	}
+	if profile.Key().Protocol == 764 {
+		if id != nil {
+			return fmt.Errorf("protocol 764 resource-pack response unexpectedly has a UUID")
+		}
+		return conn.WritePacket(pk.Marshal(responseID, pk.VarInt(resourcePackDeclined)))
+	}
+	if id == nil {
+		return fmt.Errorf("protocol %d resource-pack response requires a UUID", profile.Key().Protocol)
+	}
+	return conn.WritePacket(pk.Marshal(responseID, *id, pk.VarInt(resourcePackDeclined)))
+}
+
+func validateConfigCount(count pk.VarInt, field string, max int) error {
+	if count < 0 || int64(count) > int64(max) {
+		return fmt.Errorf("invalid %s count %d (maximum %d)", field, count, max)
+	}
+	return nil
+}
+
+func validateNextConfigCount(r *bytes.Reader, field string, max int) error {
+	position, err := r.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	var count pk.VarInt
+	_, readErr := count.ReadFrom(r)
+	_, seekErr := r.Seek(position, io.SeekStart)
+	if readErr != nil {
+		return fmt.Errorf("read %s count: %w", field, readErr)
+	}
+	if seekErr != nil {
+		return seekErr
+	}
+	return validateConfigCount(count, field, max)
 }
 
 type DataPack struct {
@@ -371,6 +736,10 @@ func (idleTagsDecoder) ReadFrom(r io.Reader) (int64, error) {
 	if err != nil {
 		return n, err
 	}
+	if err := validateConfigCount(count, "tag", registry.MaxNetworkRegistryTags); err != nil {
+		return n, err
+	}
+	var totalReferences int64
 	for i := 0; i < int(count); i++ {
 		var n1, n2, n3 int64
 		n1, err = tag.ReadFrom(r)
@@ -381,6 +750,13 @@ func (idleTagsDecoder) ReadFrom(r io.Reader) (int64, error) {
 		if err != nil {
 			return n + n1 + n2, err
 		}
+		if err = validateConfigCount(length, "tag value", registry.MaxNetworkTagEntries); err != nil {
+			return n + n1 + n2, err
+		}
+		if int64(length) > int64(registry.MaxNetworkTagReferences)-totalReferences {
+			return n + n1 + n2, fmt.Errorf("tag reference count exceeds maximum %d", registry.MaxNetworkTagReferences)
+		}
+		totalReferences += int64(length)
 		n += n1 + n2
 
 		var id pk.VarInt

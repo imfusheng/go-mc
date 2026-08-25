@@ -27,14 +27,33 @@ var (
 // Note that Ary DO read or write the Len. You aren't need to do so by your self.
 type Ary[LEN VarInt | VarLong | Byte | UnsignedByte | Short | UnsignedShort | Int | Long] struct {
 	Ary any // Slice or Pointer of Slice of FieldEncoder, FieldDecoder or both (Field)
+	// MaxLength optionally narrows the protocol-wide array limit. Zero uses
+	// MaxDataLength. A positive value must not exceed MaxDataLength.
+	MaxLength int
 }
 
 func (a Ary[LEN]) WriteTo(w io.Writer) (n int64, err error) {
+	maxLength, err := a.maxLength()
+	if err != nil {
+		return 0, err
+	}
 	array := reflect.ValueOf(a.Ary)
 	for array.Kind() == reflect.Ptr {
+		if array.IsNil() {
+			return 0, errors.New("array is a nil pointer")
+		}
 		array = array.Elem()
 	}
+	if !array.IsValid() || (array.Kind() != reflect.Slice && array.Kind() != reflect.Array) {
+		return 0, fmt.Errorf("array must be a slice or array, got %T", a.Ary)
+	}
+	if array.Len() > maxLength {
+		return 0, fmt.Errorf("array length %d exceeds maximum %d", array.Len(), maxLength)
+	}
 	Len := LEN(array.Len())
+	if int64(Len) != int64(array.Len()) {
+		return 0, fmt.Errorf("array length %d cannot be represented by its length field", array.Len())
+	}
 	if nn, err := any(&Len).(FieldEncoder).WriteTo(w); err != nil {
 		return n, err
 	} else {
@@ -42,7 +61,21 @@ func (a Ary[LEN]) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	for i := 0; i < array.Len(); i++ {
 		elem := array.Index(i)
-		nn, err := elem.Interface().(FieldEncoder).WriteTo(w)
+		if elem.Kind() == reflect.Ptr && elem.IsNil() {
+			return n, fmt.Errorf("array element %d of type %s is a nil pointer", i, elem.Type())
+		}
+		var encoder FieldEncoder
+		var ok bool
+		if elem.CanInterface() {
+			encoder, ok = elem.Interface().(FieldEncoder)
+		}
+		if !ok && elem.CanAddr() && elem.Addr().CanInterface() {
+			encoder, ok = elem.Addr().Interface().(FieldEncoder)
+		}
+		if !ok {
+			return n, fmt.Errorf("array element %d of type %s does not implement packet.FieldEncoder", i, elem.Type())
+		}
+		nn, err := encoder.WriteTo(w)
 		n += nn
 		if err != nil {
 			return n, err
@@ -52,31 +85,64 @@ func (a Ary[LEN]) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (a Ary[LEN]) ReadFrom(r io.Reader) (n int64, err error) {
+	maxLength, err := a.maxLength()
+	if err != nil {
+		return 0, err
+	}
 	var Len LEN
 	if nn, err := any(&Len).(FieldDecoder).ReadFrom(r); err != nil {
 		return nn, err
 	} else {
 		n += nn
 	}
-	if Len < 0 {
-		return n, errors.New("array length less than zero")
+	length64 := int64(Len)
+	if length64 < 0 {
+		return n, fmt.Errorf("array has negative length %d", length64)
 	}
+	if length64 > int64(maxLength) {
+		return n, fmt.Errorf("array length %d exceeds maximum %d", length64, maxLength)
+	}
+	length := int(length64)
 
 	array := reflect.ValueOf(a.Ary)
+	if !array.IsValid() || array.Kind() != reflect.Ptr || array.IsNil() {
+		return n, fmt.Errorf("array decode target must be a non-nil pointer to a slice, got %T", a.Ary)
+	}
 	for array.Kind() == reflect.Ptr {
+		if array.IsNil() {
+			return n, fmt.Errorf("array decode target contains a nil pointer: %T", a.Ary)
+		}
 		array = array.Elem()
 	}
-	if !array.CanAddr() {
-		panic(errors.New("the contents of the Ary are not addressable"))
+	if !array.IsValid() || array.Kind() != reflect.Slice || !array.CanSet() {
+		return n, fmt.Errorf("array decode target must be a pointer to a slice, got %T", a.Ary)
 	}
-	if array.Cap() < int(Len) {
-		array.Set(reflect.MakeSlice(array.Type(), int(Len), int(Len)))
+	if array.Cap() < length {
+		array.Set(reflect.MakeSlice(array.Type(), length, length))
 	} else {
-		array.Slice(0, int(Len))
+		array.Set(array.Slice(0, length))
+		array.Clear()
 	}
-	for i := 0; i < int(Len); i++ {
+	for i := 0; i < length; i++ {
 		elem := array.Index(i)
-		nn, err := elem.Addr().Interface().(FieldDecoder).ReadFrom(r)
+		if elem.Kind() == reflect.Ptr && elem.IsNil() {
+			if !elem.CanSet() {
+				return n, fmt.Errorf("array element %d of type %s is a nil pointer and cannot be initialized", i, elem.Type())
+			}
+			elem.Set(reflect.New(elem.Type().Elem()))
+		}
+		var decoder FieldDecoder
+		var ok bool
+		if elem.CanAddr() && elem.Addr().CanInterface() {
+			decoder, ok = elem.Addr().Interface().(FieldDecoder)
+		}
+		if !ok && elem.CanInterface() {
+			decoder, ok = elem.Interface().(FieldDecoder)
+		}
+		if !ok {
+			return n, fmt.Errorf("array element %d of type %s does not implement packet.FieldDecoder", i, elem.Type())
+		}
+		nn, err := decoder.ReadFrom(r)
 		n += nn
 		if err != nil {
 			return n, err
@@ -85,8 +151,28 @@ func (a Ary[LEN]) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, err
 }
 
+func (a Ary[LEN]) maxLength() (int, error) {
+	if a.MaxLength < 0 {
+		return 0, fmt.Errorf("array maximum length %d is negative", a.MaxLength)
+	}
+	if a.MaxLength == 0 {
+		return MaxDataLength, nil
+	}
+	if a.MaxLength > MaxDataLength {
+		return 0, fmt.Errorf("array maximum length %d exceeds protocol maximum %d", a.MaxLength, MaxDataLength)
+	}
+	return a.MaxLength, nil
+}
+
 func Array(ary any) Field {
 	return Ary[VarInt]{Ary: ary}
+}
+
+// ArrayWithLimit is Array with a schema-specific element limit. The limit is
+// checked immediately after the wire count is read and before the destination
+// slice is allocated.
+func ArrayWithLimit(ary any, maxLength int) Field {
+	return Ary[VarInt]{Ary: ary, MaxLength: maxLength}
 }
 
 // Opt is an optional [Field] which sending/receiving or not is depending on its Has field.

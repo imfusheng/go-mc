@@ -3,11 +3,17 @@ package basic
 import (
 	"time"
 
-	"github.com/Tnze/go-mc/data/packetid"
-	pk "github.com/Tnze/go-mc/net/packet"
+	pk "github.com/imfusheng/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/protocol"
 )
 
 const keepAliveDuration = time.Second * 20
+
+const (
+	playKeepAliveKind protocol.PacketKind = "keep_alive"
+	playPingKind      protocol.PacketKind = "ping"
+	playPongKind      protocol.PacketKind = "pong"
+)
 
 func (p *Player) resetKeepAliveDeadline() {
 	newDeadline := time.Now().Add(keepAliveDuration)
@@ -15,20 +21,23 @@ func (p *Player) resetKeepAliveDeadline() {
 }
 
 func (p *Player) handleKeepAlivePacket(packet pk.Packet) error {
-	var KeepAliveID pk.Long
-	if err := packet.Scan(&KeepAliveID); err != nil {
+	response, err := playResponsePacket(p.c.Profile, playKeepAliveKind, packet.Data)
+	if err != nil {
 		return Error{err}
 	}
 
 	p.resetKeepAliveDeadline()
 
-	// Response
-	err := p.c.Conn.WritePacket(pk.Packet{
-		ID:   int32(packetid.ServerboundKeepAlive),
-		Data: packet.Data,
-	})
-	if err != nil {
+	if err := p.c.Conn.WritePacket(response); err != nil {
 		return Error{err}
 	}
 	return nil
+}
+
+func playResponsePacket(profile *protocol.Profile, kind protocol.PacketKind, payload []byte) (pk.Packet, error) {
+	id, err := protocol.RequirePacketID(profile, protocol.StatePlay, protocol.Serverbound, kind)
+	if err != nil {
+		return pk.Packet{}, err
+	}
+	return pk.Packet{ID: id, Data: append([]byte(nil), payload...)}, nil
 }

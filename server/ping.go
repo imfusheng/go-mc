@@ -9,10 +9,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/data/packetid"
-	"github.com/Tnze/go-mc/net"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/chat"
+	"github.com/imfusheng/go-mc/net"
+	pk "github.com/imfusheng/go-mc/net/packet"
+	"github.com/imfusheng/go-mc/protocol"
 )
 
 // ListPingHandler collect server running status info
@@ -52,6 +52,7 @@ type PlayerSample struct {
 }
 
 func (s *Server) acceptListPing(conn *net.Conn, clientProtocol int32) {
+	profile, knownProfile := protocol.ByProtocol(clientProtocol)
 	var p pk.Packet
 	for i := 0; i < 2; i++ { // Ping or List. Only allow check twice
 		err := conn.ReadPacket(&p)
@@ -59,16 +60,29 @@ func (s *Server) acceptListPing(conn *net.Conn, clientProtocol int32) {
 			return
 		}
 
-		switch packetid.ClientboundPacketID(p.ID) {
-		case packetid.ClientboundStatusStatusResponse: // List
+		kind, resolveErr := resolveServerboundStatusKind(profile, knownProfile, p.ID)
+		if resolveErr != nil {
+			return
+		}
+
+		switch kind {
+		case protocol.PacketStatusRequest:
 			var resp []byte
 			resp, err = s.listResp(clientProtocol)
 			if err != nil {
 				break
 			}
-			err = conn.WritePacket(pk.Marshal(0x00, pk.String(resp)))
-		case packetid.ClientboundStatusPongResponse: // Ping
-			err = conn.WritePacket(p)
+			var responseID int32
+			responseID, err = resolveClientboundStatusID(profile, knownProfile, protocol.PacketStatusResponse, 0)
+			if err == nil {
+				err = conn.WritePacket(pk.Marshal(responseID, pk.String(resp)))
+			}
+		case protocol.PacketStatusPing:
+			var pongID int32
+			pongID, err = resolveClientboundStatusID(profile, knownProfile, protocol.PacketStatusPing, 1)
+			if err == nil {
+				err = conn.WritePacket(pk.Packet{ID: pongID, Data: p.Data})
+			}
 		}
 		if err != nil {
 			return
@@ -76,16 +90,47 @@ func (s *Server) acceptListPing(conn *net.Conn, clientProtocol int32) {
 	}
 }
 
+func resolveServerboundStatusKind(profile *protocol.Profile, knownProfile bool, id int32) (protocol.PacketKind, error) {
+	if knownProfile {
+		return protocol.RequirePacketKind(profile, protocol.StateStatus, protocol.Serverbound, id)
+	}
+	switch id {
+	case 0:
+		return protocol.PacketStatusRequest, nil
+	case 1:
+		return protocol.PacketStatusPing, nil
+	default:
+		return "", &protocol.PacketMappingError{
+			Version:   "unlisted Netty profile",
+			State:     protocol.StateStatus,
+			Direction: protocol.Serverbound,
+			ID:        id,
+			ByID:      true,
+		}
+	}
+}
+
+func resolveClientboundStatusID(profile *protocol.Profile, knownProfile bool, kind protocol.PacketKind, invariant int32) (int32, error) {
+	if knownProfile {
+		return protocol.RequirePacketID(profile, protocol.StateStatus, protocol.Clientbound, kind)
+	}
+	return invariant, nil
+}
+
 func (s *Server) listResp(clientProtocol int32) ([]byte, error) {
+	type statusPlayerSample struct {
+		Name string `json:"name"`
+		ID   string `json:"id"`
+	}
 	var list struct {
 		Version struct {
 			Name     string `json:"name"`
 			Protocol int    `json:"protocol"`
 		} `json:"version"`
 		Players struct {
-			Max    int            `json:"max"`
-			Online int            `json:"online"`
-			Sample []PlayerSample `json:"sample"`
+			Max    int                  `json:"max"`
+			Online int                  `json:"online"`
+			Sample []statusPlayerSample `json:"sample"`
 		} `json:"players"`
 		Description *chat.Message `json:"description"`
 		FavIcon     string        `json:"favicon,omitempty"`
@@ -95,7 +140,18 @@ func (s *Server) listResp(clientProtocol int32) ([]byte, error) {
 	list.Version.Protocol = s.Protocol(clientProtocol)
 	list.Players.Max = s.MaxPlayer()
 	list.Players.Online = s.OnlinePlayer()
-	list.Players.Sample = s.PlayerSamples()
+	for _, sample := range s.PlayerSamples() {
+		wireID := sample.ID.String()
+		// Protocol 4 used 32 hexadecimal digits in both Login Success and
+		// status sample UUIDs. Protocol 5 introduced canonical dashes.
+		if clientProtocol == 4 {
+			wireID = strings.ReplaceAll(wireID, "-", "")
+		}
+		list.Players.Sample = append(list.Players.Sample, statusPlayerSample{
+			Name: sample.Name,
+			ID:   wireID,
+		})
+	}
 	list.Description = s.Description()
 	list.FavIcon = s.FavIcon()
 

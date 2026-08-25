@@ -4,8 +4,8 @@ import (
 	"encoding/hex"
 	"log"
 
-	"github.com/Tnze/go-mc/offline"
-	"github.com/Tnze/go-mc/yggdrasil"
+	"github.com/imfusheng/go-mc/offline"
+	"github.com/imfusheng/go-mc/yggdrasil"
 )
 
 func ExamplePingAndList() {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	pk "github.com/Tnze/go-mc/net/packet"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 type Decoration struct {

@@ -1,4 +1,5 @@
-# Server
+# 服务端
 
-This package provide a very basic framework for server development.  
-For more example, go to [this repo](https://github.com/go-mc/server).
+本包为服务端开发提供了一个非常基础的框架。
+
+更多示例请参阅[此仓库](https://github.com/go-mc/server)。

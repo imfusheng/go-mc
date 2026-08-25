@@ -3,12 +3,14 @@ package packet
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
-	"github.com/Tnze/go-mc/nbt"
+	"github.com/imfusheng/go-mc/nbt"
 )
 
 // A Field is both FieldEncoder and FieldDecoder
@@ -82,8 +84,12 @@ type (
 )
 
 const (
-	MaxVarIntLen  = 5
-	MaxVarLongLen = 10
+	MaxVarIntLen    = 5
+	MaxVarLongLen   = 10
+	MaxStringLength = 32767
+
+	maxStringByteLength = MaxStringLength * 3
+	maxBitSetLongs      = MaxDataLength / 8
 )
 
 func (b Boolean) WriteTo(w io.Writer) (int64, error) {
@@ -108,7 +114,17 @@ func (b *Boolean) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (s String) WriteTo(w io.Writer) (int64, error) {
-	byteStr := []byte(s)
+	value := string(s)
+	if len(value) > maxStringByteLength {
+		return 0, fmt.Errorf("packet string exceeds maximum length of %d characters", MaxStringLength)
+	}
+	if !utf8.ValidString(value) {
+		return 0, errors.New("packet string contains invalid UTF-8")
+	}
+	if utf16Length(value) > MaxStringLength {
+		return 0, fmt.Errorf("packet string exceeds maximum length of %d characters", MaxStringLength)
+	}
+	byteStr := []byte(value)
 	n1, err := VarInt(len(byteStr)).WriteTo(w)
 	if err != nil {
 		return n1, err
@@ -126,24 +142,52 @@ func (s *String) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += nn
 
-	bs := make([]byte, l)
-	if _, err := io.ReadFull(r, bs); err != nil {
+	if l < 0 {
+		return n, fmt.Errorf("packet string has negative byte length %d", l)
+	}
+	if l > maxStringByteLength {
+		return n, fmt.Errorf("packet string byte length %d exceeds maximum %d", l, maxStringByteLength)
+	}
+
+	bs := make([]byte, int(l))
+	nn2, err := io.ReadFull(r, bs)
+	n += int64(nn2)
+	if err != nil {
 		return n, err
 	}
-	n += int64(l)
+	if !utf8.Valid(bs) {
+		return n, errors.New("packet string contains invalid UTF-8")
+	}
+	if utf16Length(string(bs)) > MaxStringLength {
+		return n, fmt.Errorf("packet string exceeds maximum length of %d characters", MaxStringLength)
+	}
 
 	*s = String(bs)
 	return n, nil
+}
+
+func utf16Length(s string) int {
+	length := 0
+	for _, r := range s {
+		length++
+		if r > 0xFFFF {
+			length++
+		}
+	}
+	return length
 }
 
 // readByte read one byte from io.Reader
 func readByte(r io.Reader) (int64, byte, error) {
 	if r, ok := r.(io.ByteReader); ok {
 		v, err := r.ReadByte()
-		return 1, v, err
+		if err != nil {
+			return 0, v, err
+		}
+		return 1, v, nil
 	}
 	var v [1]byte
-	n, err := r.Read(v[:])
+	n, err := io.ReadFull(r, v[:])
 	return int64(n), v[0], err
 }
 
@@ -291,24 +335,24 @@ func (v VarInt) WriteToBytes(buf []byte) int {
 
 func (v *VarInt) ReadFrom(r io.Reader) (n int64, err error) {
 	var V uint32
-	var num int64
 	byteReader := CreateByteReader(r)
-	for sec := byte(0x80); sec&0x80 != 0; num++ {
-		if num > MaxVarIntLen {
-			return n, errors.New("VarInt is too big")
-		}
-
-		sec, err = byteReader.ReadByte()
+	for num := 0; num < MaxVarIntLen; num++ {
+		sec, err := byteReader.ReadByte()
 		if err != nil {
 			return n, err
 		}
-		n += 1
+		n++
+		if num == MaxVarIntLen-1 && sec&0xF0 != 0 {
+			return n, errors.New("VarInt is too big")
+		}
 
-		V |= uint32(sec&0x7F) << uint32(7*num)
+		V |= uint32(sec&0x7F) << uint(7*num)
+		if sec&0x80 == 0 {
+			*v = VarInt(V)
+			return n, nil
+		}
 	}
-
-	*v = VarInt(V)
-	return
+	return n, errors.New("VarInt is too big")
 }
 
 // Len returns the number of bytes required to encode the VarInt.
@@ -354,23 +398,24 @@ func (v VarLong) WriteToBytes(buf []byte) int {
 
 func (v *VarLong) ReadFrom(r io.Reader) (n int64, err error) {
 	var V uint64
-	var num int64
 	byteReader := CreateByteReader(r)
-	for sec := byte(0x80); sec&0x80 != 0; num++ {
-		if num >= MaxVarLongLen {
+	for num := 0; num < MaxVarLongLen; num++ {
+		sec, err := byteReader.ReadByte()
+		if err != nil {
+			return n, err
+		}
+		n++
+		if num == MaxVarLongLen-1 && sec&0xFE != 0 {
 			return n, errors.New("VarLong is too big")
 		}
-		sec, err = byteReader.ReadByte()
-		if err != nil {
-			return
+
+		V |= uint64(sec&0x7F) << uint(7*num)
+		if sec&0x80 == 0 {
+			*v = VarLong(V)
+			return n, nil
 		}
-		n += 1
-
-		V |= uint64(sec&0x7F) << uint64(7*num)
 	}
-
-	*v = VarLong(V)
-	return
+	return n, errors.New("VarLong is too big")
 }
 
 // Len returns the number of bytes required to encode the VarLong.
@@ -401,7 +446,9 @@ func (v VarLong) Len() int {
 
 func (p Position) WriteTo(w io.Writer) (n int64, err error) {
 	var b [8]byte
-	position := uint64(p.X&0x3FFFFFF)<<38 | uint64((p.Z&0x3FFFFFF)<<12) | uint64(p.Y&0xFFF)
+	// Convert each coordinate before shifting. Shifting Z as an int overflows
+	// on 32-bit architectures before the later uint64 conversion.
+	position := uint64(p.X&0x3FFFFFF)<<38 | uint64(p.Z&0x3FFFFFF)<<12 | uint64(p.Y&0xFFF)
 	for i := 7; i >= 0; i-- {
 		b[i] = byte(position)
 		position >>= 8
@@ -549,6 +596,9 @@ func (c *countingReader) Read(p []byte) (n int, err error) {
 }
 
 func (b ByteArray) WriteTo(w io.Writer) (n int64, err error) {
+	if len(b) > MaxDataLength {
+		return 0, fmt.Errorf("byte array length %d exceeds maximum %d", len(b), MaxDataLength)
+	}
 	n1, err := VarInt(len(b)).WriteTo(w)
 	if err != nil {
 		return n1, err
@@ -563,10 +613,17 @@ func (b *ByteArray) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n1, err
 	}
-	if cap(*b) < int(Len) {
-		*b = make(ByteArray, Len)
+	if Len < 0 {
+		return n1, fmt.Errorf("byte array has negative length %d", Len)
+	}
+	if Len > MaxDataLength {
+		return n1, fmt.Errorf("byte array length %d exceeds maximum %d", Len, MaxDataLength)
+	}
+	length := int(Len)
+	if cap(*b) < length {
+		*b = make(ByteArray, length)
 	} else {
-		*b = (*b)[:Len]
+		*b = (*b)[:length]
 	}
 	n2, err := io.ReadFull(r, *b)
 	return n1 + int64(n2), err
@@ -593,6 +650,9 @@ func (p *PluginMessageData) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (b BitSet) WriteTo(w io.Writer) (n int64, err error) {
+	if len(b) > maxBitSetLongs {
+		return 0, fmt.Errorf("bit set length %d exceeds maximum %d", len(b), maxBitSetLongs)
+	}
 	n, err = VarInt(len(b)).WriteTo(w)
 	if err != nil {
 		return
@@ -613,12 +673,19 @@ func (b *BitSet) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return
 	}
-	if int(Len) > cap(*b) {
-		*b = make([]int64, Len)
-	} else {
-		*b = (*b)[:Len]
+	if Len < 0 {
+		return n, fmt.Errorf("bit set has negative length %d", Len)
 	}
-	for i := 0; i < int(Len); i++ {
+	if Len > maxBitSetLongs {
+		return n, fmt.Errorf("bit set length %d exceeds maximum %d", Len, maxBitSetLongs)
+	}
+	length := int(Len)
+	if length > cap(*b) {
+		*b = make([]int64, length)
+	} else {
+		*b = (*b)[:length]
+	}
+	for i := 0; i < length; i++ {
 		n2, err := ((*Long)(&(*b)[i])).ReadFrom(r)
 		if err != nil {
 			return n + n2, err
@@ -647,7 +714,7 @@ func (b BitSet) Len() int {
 // NewFixedBitSet make a [FixedBitSet] which can store n bits at least.
 // If n <= 0, return nil
 func NewFixedBitSet(n int64) FixedBitSet {
-	if n < 0 {
+	if n < 0 || n > MaxDataLength*8 {
 		return nil
 	}
 	return make(FixedBitSet, (n+7)/8)
@@ -659,7 +726,7 @@ func (f FixedBitSet) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (f FixedBitSet) ReadFrom(r io.Reader) (n int64, err error) {
-	n2, err := r.Read(f)
+	n2, err := io.ReadFull(r, f)
 	return int64(n2), err
 }
 

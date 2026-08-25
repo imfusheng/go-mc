@@ -5,69 +5,75 @@ import (
 	"testing"
 )
 
-func Test(t *testing.T) {
-	c := make(chan int, 1)
-	go server(t, c)
-	<-c
-	client(t)
-	<-c
+func TestRCON(t *testing.T) {
+	l, err := ListenRCON("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- serveRCON(l)
+	}()
+
+	resp, err := runRCONClient(l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `your command is "TEST COMMAND"`
+	if resp != want {
+		t.Fatalf("server response = %q, want %q", resp, want)
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
 }
 
-func server(t *testing.T, c chan<- int) {
-	l, err := ListenRCON("localhost:25575")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-
-	c <- 1 // prepared
-
+func serveRCON(l *RCONListener) error {
 	conn, err := l.Accept()
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
+	defer conn.Close()
 
-	err = conn.AcceptLogin("RightPassword")
-	if err != nil {
-		t.Fatal("password wrong")
+	if err := conn.AcceptLogin("RightPassword"); err != nil {
+		return fmt.Errorf("accept login: %w", err)
 	}
 
 	cmd, err := conn.AcceptCmd()
 	if err != nil {
-		t.Log(err)
-		return
+		return fmt.Errorf("accept command: %w", err)
 	}
 
 	resp := handleCommand(cmd)
-	err = conn.RespCmd(resp)
-	if err != nil {
-		t.Fatal(err)
+	if err := conn.RespCmd(resp); err != nil {
+		return fmt.Errorf("respond to command: %w", err)
 	}
-
-	c <- 2 // finished
+	return nil
 }
 
 func handleCommand(cmd string) (resp string) {
 	return fmt.Sprintf("your command is %q", cmd)
 }
 
-func client(t *testing.T) {
-	conn, err := DialRCON("localhost:25575", "RightPassword")
+func runRCONClient(addr string) (string, error) {
+	conn, err := DialRCON(addr, "RightPassword")
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
 	defer conn.Close()
 
-	err = conn.Cmd("TEST COMMAND")
-	if err != nil {
-		t.Fatal(err)
+	if err := conn.Cmd("TEST COMMAND"); err != nil {
+		return "", err
 	}
 
 	resp, err := conn.Resp()
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
-	t.Logf("Server response: %q", resp)
+	return resp, nil
 }
 
 func ExampleListenRCON() {

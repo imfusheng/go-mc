@@ -1,0 +1,16 @@
+* text=auto
+
+*.go   text eol=lf
+*.mod  text eol=lf
+*.sum  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
+*.txt  text eol=lf
+
+*.bin binary
+*.jar binary
+*.png binary
+*.nbt binary

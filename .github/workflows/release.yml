@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate semantic version tag
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "${TAG}" =~ ${semver_re} ]]; then
+            echo "Release tags must use semantic versioning (for example v1.2.3)."
+            exit 1
+          fi
+
+      - name: Set up stable Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+
+      - name: Verify source tree
+        shell: bash
+        run: |
+          go mod download
+          go mod verify
+          test "$(go list -m)" = "github.com/imfusheng/go-mc"
+          go mod tidy -diff
+          test -z "$(gofmt -l .)"
+          go run ./internal/generateprotocol -check
+          go vet ./...
+
+      - name: Test release
+        run: go test -race -count=1 -timeout=10m ./...
+
+      - name: Scan for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+      - name: Build example commands
+        run: go build ./examples/...
+
+  minimum-go:
+    name: Verify minimum Go version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.22.x
+          cache-dependency-path: go.sum
+
+      - name: Test minimum Go version
+        run: go test -count=1 -timeout=5m ./...
+
+  publish:
+    name: Publish GitHub release
+    needs: [verify, minimum-go]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up stable Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+
+      - name: Generate compatibility artifact
+        shell: bash
+        run: |
+          go run ./examples/mccompat -json > compatibility.json
+          sha256sum compatibility.json > compatibility.json.sha256
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; nothing to do."
+            exit 0
+          fi
+
+          args=(
+            "${TAG}"
+            --repo "${GITHUB_REPOSITORY}"
+            --verify-tag
+            --generate-notes
+            --title "${TAG}"
+          )
+          version_without_build="${TAG%%+*}"
+          if [[ "${version_without_build}" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}" compatibility.json compatibility.json.sha256

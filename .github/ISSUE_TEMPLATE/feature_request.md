@@ -1,19 +1,19 @@
 ---
-name: Feature request
-about: Suggest an idea for this project
+name: 功能请求
+about: 为此项目提出建议
 title: ''
 labels: enhancement
 assignees: ''
 
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+**你的功能请求是否与某个问题有关？请描述。**
+请清晰、简洁地描述该问题。例如：当 [...] 时，我总是感到困扰。
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+**描述你期望的解决方案**
+请清晰、简洁地描述你希望实现的效果。
 
-Example codes:
+示例代码：
 
 ```go
 func main() {
@@ -21,8 +21,8 @@ func main() {
 }
 ```
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+**描述你考虑过的替代方案**
+请清晰、简洁地描述你考虑过的其他解决方案或功能。
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+**补充信息**
+请在此处添加与该功能请求有关的其他背景信息或截图。

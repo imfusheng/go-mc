@@ -1,22 +1,16 @@
 package basic
 
 import (
-	"github.com/Tnze/go-mc/data/packetid"
-	pk "github.com/Tnze/go-mc/net/packet"
+	pk "github.com/imfusheng/go-mc/net/packet"
 )
 
 func (p *Player) handlePingPacket(packet pk.Packet) error {
-	var pingID pk.Int
-	if err := packet.Scan(&pingID); err != nil {
+	response, err := playResponsePacket(p.c.Profile, playPongKind, packet.Data)
+	if err != nil {
 		return Error{err}
 	}
 
-	// Response
-	err := p.c.Conn.WritePacket(pk.Packet{
-		ID:   int32(packetid.ServerboundPong),
-		Data: packet.Data,
-	})
-	if err != nil {
+	if err := p.c.Conn.WritePacket(response); err != nil {
 		return Error{err}
 	}
 	return nil
