@@ -3,6 +3,7 @@ package packet_test
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	pk "github.com/imfusheng/go-mc/net/packet"
@@ -72,6 +73,38 @@ func TestAryReadFromReslicesReusedCapacity(t *testing.T) {
 	}
 	if len(ary) != 3 || ary[0] != 1 || ary[1] != 2 || ary[2] != 3 {
 		t.Fatalf("decoded array = %v, want [1 2 3]", ary)
+	}
+}
+
+func TestAryReadFromHonorsSchemaLimitBeforeAllocation(t *testing.T) {
+	var wire bytes.Buffer
+	if _, err := pk.VarInt(pk.MaxDataLength).WriteTo(&wire); err != nil {
+		t.Fatal(err)
+	}
+	encoded := append([]byte(nil), wire.Bytes()...)
+	var ary []pk.String
+	field := pk.Ary[pk.VarInt]{Ary: &ary, MaxLength: 32}
+
+	var gotErr error
+	allocs := testing.AllocsPerRun(100, func() {
+		ary = nil
+		_, gotErr = field.ReadFrom(bytes.NewReader(encoded))
+	})
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "exceeds maximum 32") {
+		t.Fatalf("ReadFrom() error = %v, want schema limit error", gotErr)
+	}
+	if ary != nil {
+		t.Fatalf("ReadFrom() allocated destination with length %d before rejecting count", len(ary))
+	}
+	if allocs > 16 {
+		t.Fatalf("ReadFrom() allocations = %.1f, want a small constant number", allocs)
+	}
+}
+
+func TestArrayWithLimitAppliesToEncoding(t *testing.T) {
+	field := pk.ArrayWithLimit([]pk.Int{1, 2}, 1)
+	if _, err := field.WriteTo(&bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "exceeds maximum 1") {
+		t.Fatalf("WriteTo() error = %v, want schema limit error", err)
 	}
 }
 

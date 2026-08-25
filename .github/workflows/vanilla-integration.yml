@@ -157,7 +157,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
             --output version.json "${metadata_url}"
           printf '%s  %s\n' "${metadata_sha1}" version.json | sha1sum --check --strict -
-          jq -e --arg version "${VERSION}" '.id == $version && .type == "release"' version.json >/dev/null
+          jq -e --arg version "${VERSION}" '.id == $version and .type == "release"' version.json >/dev/null
 
           server_url="$(jq -er '.downloads.server.url' version.json)"
           server_sha1="$(jq -er '.downloads.server.sha1' version.json)"
@@ -214,6 +214,7 @@ jobs:
           server-ip=127.0.0.1
           server-port=25565
           online-mode=false
+          enforce-secure-profile=false
           enable-code-of-conduct=false
           max-players=1
           view-distance=3

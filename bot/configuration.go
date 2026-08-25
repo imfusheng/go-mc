@@ -295,7 +295,7 @@ func (c *Client) joinConfiguration(conn *net.Conn, profile *protocol.Profile) (e
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
-			if err := validateNextConfigCount(r, "registry entry", maxConfigurationEntries); err != nil {
+			if err := validateNextConfigCount(r, "registry entry", registry.MaxNetworkRegistryEntries); err != nil {
 				return ConfigErr{ErrStage, err}
 			}
 
@@ -433,7 +433,7 @@ func (c *Client) joinConfiguration(conn *net.Conn, profile *protocol.Profile) (e
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
-			if err := validateConfigCount(length, "tag registry", maxConfigurationEntries); err != nil {
+			if err := validateConfigCount(length, "tag registry", MaxConfigurationTagRegistries); err != nil {
 				return ConfigErr{ErrStage, err}
 			}
 
@@ -467,18 +467,21 @@ func (c *Client) joinConfiguration(conn *net.Conn, profile *protocol.Profile) (e
 		case protocol.PacketConfigSelectKnownPacks:
 			const ErrStage = "select known packs"
 			packs := []DataPack{}
-			err := scanConfigurationPacket(p, pk.Array(&packs))
+			err := scanConfigurationPacket(p, pk.ArrayWithLimit(&packs, MaxConfigurationKnownPacks))
 			if err != nil {
 				return ConfigErr{ErrStage, err}
 			}
-			knwonPacks := c.ConfigHandler.SelectDataPacks(packs)
+			knownPacks := c.ConfigHandler.SelectDataPacks(packs)
+			if len(knownPacks) > MaxConfigurationKnownPacks {
+				return ConfigErr{ErrStage, fmt.Errorf("selected known pack count %d exceeds maximum %d", len(knownPacks), MaxConfigurationKnownPacks)}
+			}
 			responseID, resolveErr := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigSelectKnownPacks)
 			if resolveErr != nil {
 				return ConfigErr{ErrStage, resolveErr}
 			}
 			err = conn.WritePacket(pk.Marshal(
 				responseID,
-				pk.Array(knwonPacks),
+				pk.ArrayWithLimit(knownPacks, MaxConfigurationKnownPacks),
 			))
 			if err != nil {
 				return ConfigErr{ErrStage, err}
@@ -546,6 +549,13 @@ func (c *Client) joinConfiguration(conn *net.Conn, profile *protocol.Profile) (e
 }
 
 const (
+	// MaxConfigurationKnownPacks bounds the Select Known Packs object array.
+	// A pack contains three strings, so the generic packet byte limit is not a
+	// safe element-count limit for allocation.
+	MaxConfigurationKnownPacks = 1 << 10
+	// MaxConfigurationTagRegistries bounds registry groups in Update Tags.
+	MaxConfigurationTagRegistries = 1 << 10
+
 	maxConfigurationEntries = 1 << 16
 	maxCookiePayloadBytes   = 5120
 	resourcePackDeclined    = 1
@@ -726,9 +736,10 @@ func (idleTagsDecoder) ReadFrom(r io.Reader) (int64, error) {
 	if err != nil {
 		return n, err
 	}
-	if err := validateConfigCount(count, "tag", maxConfigurationEntries); err != nil {
+	if err := validateConfigCount(count, "tag", registry.MaxNetworkRegistryTags); err != nil {
 		return n, err
 	}
+	var totalReferences int64
 	for i := 0; i < int(count); i++ {
 		var n1, n2, n3 int64
 		n1, err = tag.ReadFrom(r)
@@ -739,9 +750,13 @@ func (idleTagsDecoder) ReadFrom(r io.Reader) (int64, error) {
 		if err != nil {
 			return n + n1 + n2, err
 		}
-		if err = validateConfigCount(length, "tag value", maxConfigurationEntries); err != nil {
+		if err = validateConfigCount(length, "tag value", registry.MaxNetworkTagEntries); err != nil {
 			return n + n1 + n2, err
 		}
+		if int64(length) > int64(registry.MaxNetworkTagReferences)-totalReferences {
+			return n + n1 + n2, fmt.Errorf("tag reference count exceeds maximum %d", registry.MaxNetworkTagReferences)
+		}
+		totalReferences += int64(length)
 		n += n1 + n2
 
 		var id pk.VarInt

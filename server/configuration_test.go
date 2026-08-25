@@ -20,14 +20,15 @@ import (
 
 func TestConfigurationsAcceptConfigWaitsForFinishAcknowledgement(t *testing.T) {
 	serverConn, clientConn := pipeMC(t)
-	config := Configurations{Registries: registry.NewNetworkCodec()}
+	config := Configurations{Registries: configurationStateMachineRegistries()}
 
 	result := make(chan error, 1)
 	go func() {
 		result <- config.AcceptConfig(serverConn)
 	}()
 
-	readConfigurationPackets(t, clientConn, len(config.Registries.NetworkRegistries()))
+	writeConfigurationSettingsForProfile(t, clientConn, protocol.MustByName("1.21.1"))
+	readConfigurationPackets(t, clientConn, len(config.Registries.NetworkRegistriesForProtocol(767)))
 
 	select {
 	case err := <-result:
@@ -51,14 +52,15 @@ func TestConfigurationsAcceptConfigWaitsForFinishAcknowledgement(t *testing.T) {
 
 func TestConfigurationsAcceptConfigRejectsWrongAcknowledgement(t *testing.T) {
 	serverConn, clientConn := pipeMC(t)
-	config := Configurations{Registries: registry.NewNetworkCodec()}
+	config := Configurations{Registries: configurationStateMachineRegistries()}
 
 	result := make(chan error, 1)
 	go func() {
 		result <- config.AcceptConfig(serverConn)
 	}()
 
-	readConfigurationPackets(t, clientConn, len(config.Registries.NetworkRegistries()))
+	writeConfigurationSettingsForProfile(t, clientConn, protocol.MustByName("1.21.1"))
+	readConfigurationPackets(t, clientConn, len(config.Registries.NetworkRegistriesForProtocol(767)))
 	if err := clientConn.WritePacket(pk.Marshal(packetid.ServerboundConfigPong)); err != nil {
 		t.Fatalf("write wrong acknowledgement: %v", err)
 	}
@@ -82,11 +84,12 @@ func TestConfigurationsAcceptConfigRejectsWrongAcknowledgement(t *testing.T) {
 
 func TestConfigurationsAcceptConfigRejectsTrailingAcknowledgementData(t *testing.T) {
 	serverConn, clientConn := pipeMC(t)
-	config := Configurations{Registries: registry.NewNetworkCodec()}
+	config := Configurations{Registries: configurationStateMachineRegistries()}
 	result := make(chan error, 1)
 	go func() { result <- config.AcceptConfig(serverConn) }()
 
-	readConfigurationPackets(t, clientConn, len(config.Registries.NetworkRegistries()))
+	writeConfigurationSettingsForProfile(t, clientConn, protocol.MustByName("1.21.1"))
+	readConfigurationPackets(t, clientConn, len(config.Registries.NetworkRegistriesForProtocol(767)))
 	if err := clientConn.WritePacket(pk.Marshal(
 		packetid.ServerboundConfigFinishConfiguration,
 		pk.Byte(1),
@@ -95,6 +98,29 @@ func TestConfigurationsAcceptConfigRejectsTrailingAcknowledgementData(t *testing
 	}
 	if err := <-result; err == nil {
 		t.Fatal("AcceptConfig() accepted trailing acknowledgement data")
+	}
+}
+
+func TestConfigurationsAcceptsBrandPayloadBeforeInformationAndAcknowledgement(t *testing.T) {
+	profile := protocol.MustByName("1.21.1")
+	serverConn, clientConn := pipeMC(t)
+	config := Configurations{Registries: configurationStateMachineRegistries()}
+	result := make(chan error, 1)
+	go func() { result <- config.AcceptConfigForProfile(serverConn, profile) }()
+
+	writeConfigurationBrandPayload(t, clientConn, profile)
+	writeConfigurationSettingsForProfile(t, clientConn, profile)
+	readConfigurationPackets(t, clientConn, len(config.Registries.NetworkRegistriesForProtocol(profile.Key().Protocol)))
+	writeConfigurationBrandPayload(t, clientConn, profile)
+	ackID, err := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigFinish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := clientConn.WritePacket(pk.Marshal(ackID)); err != nil {
+		t.Fatalf("write finish acknowledgement: %v", err)
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("AcceptConfigForProfile() error = %v", err)
 	}
 }
 
@@ -120,14 +146,32 @@ func TestConfigurationsAcceptConfigRejectsNilProfileWithTypedError(t *testing.T)
 	}
 }
 
-func TestBuiltInConfigurationsRejectsNonBaselineRegistrySchemas(t *testing.T) {
+func TestBuiltInConfigurationsRejectsUnvalidatedSchemasAndEmptyData(t *testing.T) {
+	for _, version := range []string{
+		"1.20.2", "1.20.4", "1.20.5", "1.21.3", "1.21.5", "1.21.6", "1.21.11", "26.1", "26.2",
+	} {
+		t.Run(version, func(t *testing.T) {
+			serverConn, _ := pipeMC(t)
+			err := (&Configurations{Registries: configurationStateMachineRegistries()}).AcceptConfigForProfile(
+				serverConn, protocol.MustByName(version),
+			)
+			var unsupported protocol.UnsupportedCapabilityError
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("AcceptConfigForProfile() error = %v, want UnsupportedCapabilityError", err)
+			}
+		})
+	}
+
 	serverConn, _ := pipeMC(t)
-	for _, version := range []string{"1.20.2", "1.21.2", "26.2"} {
-		err := (&Configurations{}).AcceptConfigForProfile(serverConn, protocol.MustByName(version))
-		var unsupported protocol.UnsupportedCapabilityError
-		if !errors.As(err, &unsupported) {
-			t.Fatalf("Minecraft %s error = %v, want UnsupportedCapabilityError", version, err)
-		}
+	err := (&Configurations{Registries: registry.NewNetworkCodec()}).AcceptConfigForProfile(
+		serverConn, protocol.MustByName("1.21.1"),
+	)
+	if err == nil {
+		t.Fatal("protocol-767 configuration accepted empty required registries")
+	}
+	var unsupported protocol.UnsupportedCapabilityError
+	if errors.As(err, &unsupported) {
+		t.Fatalf("protocol-767 empty registry error = %v, want data validation error", err)
 	}
 }
 
@@ -314,6 +358,25 @@ func pipeMC(t *testing.T) (*mcnet.Conn, *mcnet.Conn) {
 	return mcnet.WrapConn(serverSocket), mcnet.WrapConn(clientSocket)
 }
 
+// configurationStateMachineRegistries supplies structurally encodable entries
+// so these tests exercise packet ordering and acknowledgements. They are not a
+// claim that the placeholder values form a playable Vanilla datapack.
+func configurationStateMachineRegistries() registry.Registries {
+	registries := registry.NewNetworkCodec()
+	registries.ChatType.PutWithoutData("minecraft:test")
+	registries.DamageType.PutWithoutData("minecraft:test")
+	registries.DimensionType.PutWithoutData("minecraft:test")
+	registries.TrimMaterial.PutWithoutData("minecraft:test")
+	registries.TrimPattern.PutWithoutData("minecraft:test")
+	registries.WorldGenBiome.PutWithoutData("minecraft:test")
+	registries.Wolfvariant.PutWithoutData("minecraft:test")
+	registries.PaintingVariant.PutWithoutData("minecraft:test")
+	registries.BannerPattern.PutWithoutData("minecraft:test")
+	registries.Enchantment.PutWithoutData("minecraft:test")
+	registries.JukeboxSong.PutWithoutData("minecraft:test")
+	return registries
+}
+
 func readPacketID(t *testing.T, conn *mcnet.Conn, want int32) {
 	t.Helper()
 	var packet pk.Packet
@@ -331,6 +394,45 @@ func readConfigurationPackets(t *testing.T, conn *mcnet.Conn, registryCount int)
 		readPacketID(t, conn, int32(packetid.ClientboundConfigRegistryData))
 	}
 	readPacketID(t, conn, int32(packetid.ClientboundConfigFinishConfiguration))
+}
+
+func writeConfigurationSettingsForProfile(t *testing.T, conn *mcnet.Conn, profile *protocol.Profile) {
+	t.Helper()
+	packetID, err := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigSettings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := []pk.FieldEncoder{
+		pk.String("en_us"),
+		pk.Byte(8),
+		pk.VarInt(0),
+		pk.Boolean(true),
+		pk.UnsignedByte(0x7f),
+		pk.VarInt(1),
+		pk.Boolean(false),
+		pk.Boolean(true),
+	}
+	if profile.Key().Protocol >= 768 {
+		fields = append(fields, pk.VarInt(0))
+	}
+	if err := conn.WritePacket(pk.Marshal(packetID, fields...)); err != nil {
+		t.Fatalf("write configuration client information: %v", err)
+	}
+}
+
+func writeConfigurationBrandPayload(t *testing.T, conn *mcnet.Conn, profile *protocol.Profile) {
+	t.Helper()
+	packetID, err := protocol.RequirePacketID(profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigCustomPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WritePacket(pk.Marshal(
+		packetID,
+		pk.Identifier("minecraft:brand"),
+		pk.PluginMessageData{0x05, 'g', 'o', '-', 'm', 'c'},
+	)); err != nil {
+		t.Fatalf("write configuration brand payload: %v", err)
+	}
 }
 
 type loginHandlerFunc func(*mcnet.Conn, int32) (string, uuid.UUID, *user.PublicKey, []user.Property, error)

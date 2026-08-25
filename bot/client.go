@@ -98,10 +98,13 @@ type Conn struct {
 	*net.Conn
 	send, recv queue.Queue[pk.Packet]
 	pool       sync.Pool // pool of recv packet data
-	rerrMu     sync.RWMutex
-	rerr       error
-	closeOnce  sync.Once
-	closeErr   error
+	// releasePacketHook observes receive-buffer releases in tests without
+	// relying on sync.Pool retaining values across garbage collection.
+	releasePacketHook func([]byte)
+	rerrMu            sync.RWMutex
+	rerr              error
+	closeOnce         sync.Once
+	closeErr          error
 }
 
 func warpConn(c *net.Conn, qr, qw queue.Queue[pk.Packet]) *Conn {
@@ -185,12 +188,13 @@ func (c *Conn) Close() error {
 		return nil
 	}
 	c.closeOnce.Do(func() {
-		queueErr := closePacketQueue(c.send)
+		sendQueueErr := closePacketQueue(c.send)
+		recvQueueErr := closePacketQueue(c.recv)
 		var connErr error
 		if c.Conn != nil {
 			connErr = c.Conn.Close()
 		}
-		c.closeErr = errors.Join(queueErr, connErr)
+		c.closeErr = errors.Join(sendQueueErr, recvQueueErr, connErr)
 	})
 	return c.closeErr
 }

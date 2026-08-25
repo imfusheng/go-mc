@@ -68,7 +68,7 @@ CI 会在 Linux、macOS 和 Windows 上，使用 Go 1.22 和稳定版 Go 执行�
 
 `.github/workflows/vanilla-integration.yml` 提供每月、手动运行以及显式 `vanilla-test-*` 测试标签触发的官方原版服务端互操作证据。测试标签入口用于在功能分支尚未合并到默认分支时验证精确提交，并且仍受下述仓库级 EULA 门控。旧式夹具（1.2.5 至 1.6.4）仅测试 Status。每个 Netty 夹具会先通过精确版本的 Status 就绪检查，再使用离线模式客户端完成 Handshake、Login、存在时的 Configuration，并进入 Play。验证器会在同一个严格的尝试截止时间内读取首个 Play 数据包，并要求其档案特定的语义种类为 `login`（Join Game）。夹具会明确设置 `enable-code-of-conduct=false`；与此同时，验证器不会安装同意回调，因此若服务端仍发送 Code of Conduct 数据包，验证会失败，而不会悄然接受。
 
-除非有人在手动输入中勾选 `accept_eula`，或仓库管理员设置 `MINECRAFT_EULA_ACCEPTED=true`，否则该通道会保持禁用。没有这一明确门控，工作流绝不会写入 `eula=true` 或启动服务端；本项目不会代替贡献者接受 Mojang 的 EULA。
+除非有人在手动输入中勾选 `accept_eula`，或仓库管理员设置 `MINECRAFT_EULA_ACCEPTED=true`，否则该通道会保持禁用。没有这一明确门控，工作流绝不会写入 `eula=true` 或启动服务端；本项目不会代替贡献者接受 Mojang 的 EULA。测试服务器同时显式设置 `online-mode=false` 与 `enforce-secure-profile=false`，因此该通道验证离线模式的线路互操作，不把 Mojang 会话服务可用性混入协议矩阵。
 
 矩阵会为目录中每个主版本选取当前 Mojang 官方启动器元数据仍提供服务端下载的最新稳定补丁版，并额外包含 1.7.2，从而同时为协议 4 和协议 5 提供原版 Netty 覆盖：
 

@@ -11,7 +11,12 @@ import (
 
 const (
 	bundleDelimiterKind protocol.PacketKind = "bundle_delimiter"
-	maxBundlePackets                        = 4096
+	// MaxBundlePackets is the protocol packet-count ceiling for one bundle.
+	MaxBundlePackets = 4096
+	// MaxBundleBytes limits the retained packet ID and payload bytes in one
+	// bundle. It permits several maximum-sized frames without allowing the
+	// packet-count limit to amplify into gigabytes of retained memory.
+	MaxBundleBytes = 4 * pk.MaxDataLength
 )
 
 // ErrInvalidPacketID reports a clientbound packet ID that is absent from the
@@ -80,6 +85,13 @@ func (d PacketHandlerError) Unwrap() error {
 }
 
 func (c *Client) handleBundlePackets() (err error) {
+	return c.handleBundlePacketsWithByteLimit(MaxBundleBytes)
+}
+
+func (c *Client) handleBundlePacketsWithByteLimit(byteLimit int) (err error) {
+	if byteLimit <= 0 || byteLimit > MaxBundleBytes {
+		return fmt.Errorf("invalid bundle byte limit %d (maximum %d)", byteLimit, MaxBundleBytes)
+	}
 	type resolvedPacket struct {
 		packet pk.Packet
 		kind   protocol.PacketKind
@@ -90,7 +102,8 @@ func (c *Client) handleBundlePackets() (err error) {
 			c.releasePacket(resolved.packet)
 		}
 	}()
-	for i := 0; i < maxBundlePackets; i++ {
+	totalBytes := 0
+	for {
 		var p pk.Packet
 		// Read packets
 		if err := c.Conn.ReadPacket(&p); err != nil {
@@ -107,12 +120,24 @@ func (c *Client) handleBundlePackets() (err error) {
 			c.releasePacket(p)
 			goto handlePackets
 		}
+		if len(packets) >= MaxBundlePackets {
+			c.releasePacket(p)
+			return fmt.Errorf("bundle packet count exceeds maximum %d", MaxBundlePackets)
+		}
 
 		// A bundle delimiter is consumed above and can therefore never be
 		// recursively dispatched as the opening of a nested bundle.
+		// Charge the full retained backing array, not merely the visible length:
+		// receive buffers come from a pool and a tiny payload may keep a former
+		// maximum-sized allocation alive until the whole bundle is dispatched.
+		packetBytes := pk.VarInt(p.ID).Len() + cap(p.Data)
+		if packetBytes > byteLimit-totalBytes {
+			c.releasePacket(p)
+			return fmt.Errorf("bundle packet bytes exceed maximum %d", byteLimit)
+		}
+		totalBytes += packetBytes
 		packets = append(packets, resolvedPacket{packet: p, kind: kind})
 	}
-	return errors.New("packet number of a bundle out of limit")
 
 handlePackets:
 	for i := range packets {
@@ -153,7 +178,8 @@ func (c *Client) resolvePlayPacketKind(id int32) (protocol.PacketKind, error) {
 
 func (c *Client) handlePacketKind(p pk.Packet, kind protocol.PacketKind) (err error) {
 	packetID := packetid.ClientboundPacketID(p.ID)
-	for _, handler := range c.Events.generic {
+	generic, semantic, numeric := c.Events.snapshot(kind, packetID, usesBaselineNumericPacketIDs(c.Profile))
+	for _, handler := range generic {
 		if handler.F == nil {
 			return PacketHandlerError{ID: packetID, Kind: kind, Err: errors.New("nil generic packet handler")}
 		}
@@ -161,7 +187,7 @@ func (c *Client) handlePacketKind(p pk.Packet, kind protocol.PacketKind) (err er
 			return PacketHandlerError{ID: packetID, Kind: kind, Err: err}
 		}
 	}
-	for _, handler := range c.Events.semantic[kind] {
+	for _, handler := range semantic {
 		if handler.F == nil {
 			return PacketHandlerError{ID: packetID, Kind: kind, Err: errors.New("nil semantic packet handler")}
 		}
@@ -169,13 +195,7 @@ func (c *Client) handlePacketKind(p pk.Packet, kind protocol.PacketKind) (err er
 			return PacketHandlerError{ID: packetID, Kind: kind, Err: err}
 		}
 	}
-	if !usesBaselineNumericPacketIDs(c.Profile) {
-		return nil
-	}
-	if int(packetID) >= len(c.Events.handlers) {
-		return nil
-	}
-	for _, handler := range c.Events.handlers[packetID] {
+	for _, handler := range numeric {
 		if handler.F == nil {
 			return PacketHandlerError{ID: packetID, Kind: kind, Err: errors.New("nil packet handler")}
 		}
@@ -196,6 +216,9 @@ func usesBaselineNumericPacketIDs(profile *protocol.Profile) bool {
 
 func (c *Client) releasePacket(p pk.Packet) {
 	if c != nil && c.Conn != nil && p.Data != nil {
+		if c.Conn.releasePacketHook != nil {
+			c.Conn.releasePacketHook(p.Data)
+		}
 		c.Conn.pool.Put(p.Data)
 	}
 }

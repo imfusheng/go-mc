@@ -2,6 +2,8 @@ package bot
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	stdnet "net"
 	"testing"
@@ -14,6 +16,69 @@ import (
 	"github.com/imfusheng/go-mc/protocol"
 	"github.com/imfusheng/go-mc/yggdrasil/user"
 )
+
+func TestLoginStartSelectsVersionedProfileKeySignature(t *testing.T) {
+	profileID := uuid.MustParse("00112233-4455-6677-8899-aabbccddeeff")
+	var keyPair user.KeyPairResp
+	keyPair.KeyPair.PublicKey = string(pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PUBLIC KEY", Bytes: []byte{0x01, 0x02, 0x03},
+	}))
+	keyPair.PublicKeySignature = base64.StdEncoding.EncodeToString([]byte{0x19})
+	keyPair.PublicKeySignatureV2 = base64.StdEncoding.EncodeToString([]byte{0x20})
+	keyPair.ExpiresAt = time.UnixMilli(1234)
+
+	for _, test := range []struct {
+		version       string
+		wantSignature byte
+		wantUUID      bool
+	}{
+		{version: "1.19", wantSignature: 0x19},
+		{version: "1.19.1", wantSignature: 0x20, wantUUID: true},
+	} {
+		t.Run(test.version, func(t *testing.T) {
+			profile := protocol.MustByName(test.version)
+			client := NewClient()
+			client.Auth.Name = "ProfileTest"
+			client.Auth.UUID = profileID.String()
+			client.UUID = profileID
+			packet, err := client.loginStartPacket(profile, JoinOptions{KeyPair: &keyPair})
+			if err != nil {
+				t.Fatalf("loginStartPacket: %v", err)
+			}
+			r := bytes.NewReader(packet.Data)
+			var name pk.String
+			var hasKey pk.Boolean
+			if _, err := (pk.Tuple{&name, &hasKey}).ReadFrom(r); err != nil {
+				t.Fatalf("read Login Start prefix: %v", err)
+			}
+			if name != "ProfileTest" || !hasKey {
+				t.Fatalf("Login Start prefix = name %q key %t", name, hasKey)
+			}
+			var expires pk.Long
+			var encodedKey, signature pk.ByteArray
+			if _, err := (pk.Tuple{&expires, &encodedKey, &signature}).ReadFrom(r); err != nil {
+				t.Fatalf("read profile key: %v", err)
+			}
+			if expires != 1234 || !bytes.Equal(encodedKey, []byte{1, 2, 3}) ||
+				!bytes.Equal(signature, []byte{test.wantSignature}) {
+				t.Fatalf("profile key = expiry %d key %x signature %x", expires, encodedKey, signature)
+			}
+			if test.wantUUID {
+				var hasUUID pk.Boolean
+				var gotUUID pk.UUID
+				if _, err := (pk.Tuple{&hasUUID, &gotUUID}).ReadFrom(r); err != nil {
+					t.Fatalf("read profile UUID: %v", err)
+				}
+				if !hasUUID || uuid.UUID(gotUUID) != profileID {
+					t.Fatalf("profile UUID = present %t ID %s", hasUUID, uuid.UUID(gotUUID))
+				}
+			}
+			if r.Len() != 0 {
+				t.Fatalf("Login Start left %d trailing bytes", r.Len())
+			}
+		})
+	}
+}
 
 func TestLoginPluginResponseFailsOnProtocol485MappingGap(t *testing.T) {
 	profile := protocol.MustByName("1.14.2")

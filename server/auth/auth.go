@@ -2,12 +2,15 @@ package auth
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/aes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +46,17 @@ func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey) (*Resp, err
 // EncryptForProfile authenticates and encrypts a connection using the login
 // packet schema selected by profile.
 func EncryptForProfile(conn *net.Conn, name string, serverKey *rsa.PrivateKey, profile *protocol.Profile) (*Resp, error) {
+	return encryptForProfile(conn, name, serverKey, profile, nil)
+}
+
+// EncryptForProfileWithPublicKey authenticates and encrypts a connection using
+// the login packet schema selected by profile. profilePublicKey is used by the
+// signed verify-token response supported by protocols 759 and 760.
+func EncryptForProfileWithPublicKey(conn *net.Conn, name string, serverKey *rsa.PrivateKey, profile *protocol.Profile, profilePublicKey *rsa.PublicKey) (*Resp, error) {
+	return encryptForProfile(conn, name, serverKey, profile, profilePublicKey)
+}
+
+func encryptForProfile(conn *net.Conn, name string, serverKey *rsa.PrivateKey, profile *protocol.Profile, profilePublicKey *rsa.PublicKey) (*Resp, error) {
 	if conn == nil {
 		return nil, errors.New("nil connection")
 	}
@@ -71,7 +85,7 @@ func EncryptForProfile(conn *net.Conn, name string, serverKey *rsa.PrivateKey, p
 	}
 
 	// encryption response
-	SharedSecret, err := encryptionResponse(conn, serverKey, verifyToken, profile)
+	SharedSecret, err := encryptionResponse(conn, serverKey, verifyToken, profile, profilePublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +133,7 @@ func encryptionRequest(conn *net.Conn, publicKey, verifyToken []byte, profile *p
 	return conn.WritePacket(pk.Marshal(packetID, fields...))
 }
 
-func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken []byte, profile *protocol.Profile) ([]byte, error) {
+func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken []byte, profile *protocol.Profile, profilePublicKey *rsa.PublicKey) ([]byte, error) {
 	if conn == nil || serverKey == nil || serverKey.N == nil {
 		return nil, errors.New("invalid encryption response arguments")
 	}
@@ -141,6 +155,7 @@ func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken [
 	}
 
 	var keyBytes, encryptedVerifyToken []byte
+	usesEncryptedVerifyToken := true
 	r := bytes.NewReader(p.Data)
 	if profile.LoginByteArraysUseShortLength() {
 		var key, token shortByteArray
@@ -153,11 +168,21 @@ func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken [
 		if keyBytes, err = readBoundedAuthByteArray(r, maxEncryptedLoginFieldLength, "shared secret"); err == nil {
 			_, err = hasVerifyToken.ReadFrom(r)
 		}
-		if err == nil && !hasVerifyToken {
-			return nil, errors.New("signed nonce encryption response is not supported")
-		}
-		if err == nil {
+		if err == nil && hasVerifyToken {
 			encryptedVerifyToken, err = readBoundedAuthByteArray(r, maxEncryptedLoginFieldLength, "verify token")
+		} else if err == nil {
+			usesEncryptedVerifyToken = false
+			if profilePublicKey == nil || profilePublicKey.N == nil {
+				return nil, errors.New("signed nonce encryption response requires a profile public key")
+			}
+			var salt pk.Long
+			if _, err = salt.ReadFrom(r); err == nil {
+				var signature []byte
+				signature, err = readBoundedAuthByteArray(r, maxEncryptedLoginFieldLength, "signed nonce signature")
+				if err == nil {
+					err = verifySignedNonce(profilePublicKey, verifyToken, int64(salt), signature)
+				}
+			}
 		}
 	} else {
 		keyBytes, err = readBoundedAuthByteArray(r, maxEncryptedLoginFieldLength, "shared secret")
@@ -171,19 +196,25 @@ func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken [
 	if len(keyBytes) > maxEncryptedLoginFieldLength || len(encryptedVerifyToken) > maxEncryptedLoginFieldLength {
 		return nil, errors.New("encrypted login field is too long")
 	}
-	if len(keyBytes) != serverKey.Size() || len(encryptedVerifyToken) != serverKey.Size() {
+	if len(keyBytes) != serverKey.Size() {
+		return nil, fmt.Errorf("invalid RSA ciphertext length for shared secret: got=%d want=%d", len(keyBytes), serverKey.Size())
+	}
+	if usesEncryptedVerifyToken && len(encryptedVerifyToken) != serverKey.Size() {
 		return nil, fmt.Errorf("invalid RSA ciphertext lengths: secret=%d token=%d want=%d", len(keyBytes), len(encryptedVerifyToken), serverKey.Size())
 	}
 	if r.Len() != 0 {
 		return nil, fmt.Errorf("encryption response contains %d trailing bytes", r.Len())
 	}
 
-	// confirm to verify token
-	decryptedVerifyToken, err := rsa.DecryptPKCS1v15(rand.Reader, serverKey, encryptedVerifyToken)
-	if err != nil {
-		return nil, err
-	} else if !bytes.Equal(verifyToken, decryptedVerifyToken) {
-		return nil, errors.New("verifyToken not match")
+	if usesEncryptedVerifyToken {
+		// Confirm the encrypted verify token for the legacy/nonce branch. The
+		// signed branch has already proved possession of the profile key above.
+		decryptedVerifyToken, decryptErr := rsa.DecryptPKCS1v15(rand.Reader, serverKey, encryptedVerifyToken)
+		if decryptErr != nil {
+			return nil, decryptErr
+		} else if !bytes.Equal(verifyToken, decryptedVerifyToken) {
+			return nil, errors.New("verifyToken not match")
+		}
 	}
 
 	// get sharedSecret
@@ -196,6 +227,25 @@ func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken [
 	}
 
 	return sharedSecret, nil
+}
+
+func verifySignedNonce(profilePublicKey *rsa.PublicKey, verifyToken []byte, salt int64, signature []byte) error {
+	if profilePublicKey == nil || profilePublicKey.N == nil {
+		return errors.New("missing profile public key")
+	}
+	if len(signature) != profilePublicKey.Size() {
+		return fmt.Errorf("invalid signed nonce signature length %d (expected %d)", len(signature), profilePublicKey.Size())
+	}
+
+	hash := sha256.New()
+	_, _ = hash.Write(verifyToken)
+	var encodedSalt [8]byte
+	binary.BigEndian.PutUint64(encodedSalt[:], uint64(salt))
+	_, _ = hash.Write(encodedSalt[:])
+	if err := rsa.VerifyPKCS1v15(profilePublicKey, crypto.SHA256, hash.Sum(nil), signature); err != nil {
+		return fmt.Errorf("verify signed nonce: %w", err)
+	}
+	return nil
 }
 
 const maxEncryptedLoginFieldLength = 8192

@@ -218,11 +218,10 @@ func verify(ctx context.Context, cfg config, version protocol.Version, ping ping
 	}
 }
 
-// deadlineDialer turns the attempt context deadline into a socket deadline.
-// JoinServerWithOptions uses its context while dialing, but Minecraft login and
-// configuration are synchronous reads and writes after DialMCContext returns;
-// the socket deadline keeps those operations inside the same hard attempt
-// budget too.
+// deadlineDialer independently enforces the attempt deadline at the socket
+// layer. JoinServerWithOptions also binds its context during Login and
+// Configuration, while the explicit deadline remains defense in depth for a
+// custom dialer and for the verifier's first Play read below.
 type deadlineDialer struct {
 	base mcnet.MCDialer
 }
@@ -279,6 +278,13 @@ func enterPlay(ctx context.Context, address string, profile *protocol.Profile) e
 	}
 	if client.Conn == nil {
 		return errors.New("join returned without a Play connection")
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("vanilla verifier requires a Play read deadline")
+	}
+	if err := client.Conn.Socket.SetReadDeadline(deadline); err != nil {
+		return fmt.Errorf("set first Play packet deadline: %w", err)
 	}
 
 	var first pk.Packet

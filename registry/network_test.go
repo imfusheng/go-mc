@@ -2,6 +2,7 @@ package registry
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	pk "github.com/imfusheng/go-mc/net/packet"
@@ -55,6 +56,58 @@ func TestRegistryReadFromPreservesIDsWithoutData(t *testing.T) {
 	}
 	if !bytes.Equal(roundTrip.Bytes(), wireBytes(fields, t)) {
 		t.Fatalf("round trip = %x, want %x", roundTrip.Bytes(), wireBytes(fields, t))
+	}
+}
+
+func TestRegistryReadFromRejectsOversizedCountBeforeMutation(t *testing.T) {
+	reg := NewRegistry[struct{}]()
+	reg.Put("minecraft:existing", struct{}{})
+	wire := wireBytes(pk.VarInt(MaxNetworkRegistryEntries+1), t)
+
+	var gotErr error
+	allocs := testing.AllocsPerRun(100, func() {
+		_, gotErr = reg.ReadFrom(bytes.NewReader(wire))
+	})
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "registry entry count") {
+		t.Fatalf("ReadFrom() error = %v, want registry entry limit error", gotErr)
+	}
+	if id, value := reg.Get("minecraft:existing"); id != 0 || value == nil {
+		t.Fatal("ReadFrom() mutated the registry before rejecting the count")
+	}
+	if allocs > 16 {
+		t.Fatalf("ReadFrom() allocations = %.1f, want a small constant number", allocs)
+	}
+}
+
+func TestRegistryReadTagsRejectsOversizedElementCountBeforeAllocation(t *testing.T) {
+	reg := NewRegistry[struct{}]()
+	reg.Put("minecraft:value", struct{}{})
+	wire := wireBytes(pk.Tuple{
+		pk.VarInt(1),
+		pk.Identifier("minecraft:test"),
+		pk.VarInt(MaxNetworkTagEntries + 1),
+	}, t)
+
+	var gotErr error
+	allocs := testing.AllocsPerRun(100, func() {
+		_, gotErr = reg.ReadTagsFrom(bytes.NewReader(wire))
+	})
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "registry tag entry count") {
+		t.Fatalf("ReadTagsFrom() error = %v, want tag entry limit error", gotErr)
+	}
+	if values := reg.Tag("minecraft:test"); values != nil {
+		t.Fatalf("ReadTagsFrom() retained %d values after rejecting the count", len(values))
+	}
+	if allocs > 24 {
+		t.Fatalf("ReadTagsFrom() allocations = %.1f, want a small constant number", allocs)
+	}
+}
+
+func TestRegistryReadTagsRejectsOversizedTagCount(t *testing.T) {
+	reg := NewRegistry[struct{}]()
+	wire := wireBytes(pk.VarInt(MaxNetworkRegistryTags+1), t)
+	if _, err := reg.ReadTagsFrom(bytes.NewReader(wire)); err == nil || !strings.Contains(err.Error(), "registry tag count") {
+		t.Fatalf("ReadTagsFrom() error = %v, want tag count limit error", err)
 	}
 }
 

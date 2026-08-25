@@ -14,6 +14,19 @@ const (
 	LoginStartNameAndUUID
 )
 
+// ConfigurationRegistryDataStyle describes the two Registry Data payload
+// families used by the Configuration state. Protocols 764 and 765
+// (Minecraft 1.20.2 through 1.20.4) send the complete registry codec as one
+// anonymous-NBT payload. Protocol 766 and later send one
+// identifier-and-entries packet per registry.
+type ConfigurationRegistryDataStyle uint8
+
+const (
+	ConfigurationRegistryDataUnsupported ConfigurationRegistryDataStyle = iota
+	ConfigurationRegistryDataCompound
+	ConfigurationRegistryDataPerRegistry
+)
+
 // LoginStartStyle returns the Login Start wire family for this profile.
 func (p *Profile) LoginStartStyle() LoginStartStyle {
 	if p == nil || p.key.Transport != TransportNetty {
@@ -45,6 +58,19 @@ func (p *Profile) HasLoginAcknowledgement() bool {
 // and Play. Mojang introduced it in Java Edition 1.20.2 (protocol 764).
 func (p *Profile) HasConfigurationState() bool {
 	return p.HasLoginAcknowledgement()
+}
+
+// ConfigurationRegistryDataStyle returns the Registry Data wire family for
+// this profile. Callers must still resolve the numeric packet ID through the
+// profile because IDs change independently from the payload family.
+func (p *Profile) ConfigurationRegistryDataStyle() ConfigurationRegistryDataStyle {
+	if p == nil || !p.HasConfigurationState() {
+		return ConfigurationRegistryDataUnsupported
+	}
+	if p.key.Protocol <= 765 {
+		return ConfigurationRegistryDataCompound
+	}
+	return ConfigurationRegistryDataPerRegistry
 }
 
 // LoginSuccessUsesStringUUID reports whether Login Success carries the UUID as

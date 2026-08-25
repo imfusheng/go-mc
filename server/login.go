@@ -132,8 +132,13 @@ func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocolNumber int32) (
 	}
 	if d.EnforceSecureProfile {
 		switch wireProfile.LoginStartStyle() {
-		case protocol.LoginStartNameAndOptionalSignature, protocol.LoginStartNameSignatureAndOptionalUUID:
-			if profilePubKey == nil || !profilePubKey.Verify() {
+		case protocol.LoginStartNameAndOptionalSignature:
+			if profilePubKey == nil || !profilePubKey.VerifyV1() {
+				err = LoginFailErr{reason: chat.Text("A valid, unexpired profile public key is required")}
+				return
+			}
+		case protocol.LoginStartNameSignatureAndOptionalUUID:
+			if profilePubKey == nil || id == uuid.Nil || !profilePubKey.VerifyV2(id) {
 				err = LoginFailErr{reason: chat.Text("A valid, unexpired profile public key is required")}
 				return
 			}
@@ -154,8 +159,20 @@ func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocolNumber int32) (
 		}
 		var resp *auth.Resp
 		// Auth, Encrypt
-		resp, err = auth.EncryptForProfile(conn, name, serverKey, wireProfile)
+		var profileRSAKey *rsa.PublicKey
+		if profilePubKey != nil {
+			profileRSAKey = profilePubKey.PubKey
+		}
+		resp, err = auth.EncryptForProfileWithPublicKey(conn, name, serverKey, wireProfile, profileRSAKey)
 		if err != nil {
+			return
+		}
+		// Protocol 760 certificates bind the chat key to a UUID supplied by
+		// the client. Revalidate it against the identity authenticated by
+		// sessionserver before accepting that client-provided UUID.
+		if d.EnforceSecureProfile && wireProfile.LoginStartStyle() == protocol.LoginStartNameSignatureAndOptionalUUID &&
+			(profilePubKey == nil || !profilePubKey.VerifyV2(resp.ID)) {
+			err = LoginFailErr{reason: chat.Text("Profile public key does not match the authenticated account")}
 			return
 		}
 		name = resp.Name

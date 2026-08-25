@@ -225,7 +225,7 @@ func (c *Client) loginStartPacket(profile *protocol.Profile, options JoinOptions
 	usesProfileKey := profile.LoginStartStyle() == protocol.LoginStartNameAndOptionalSignature ||
 		profile.LoginStartStyle() == protocol.LoginStartNameSignatureAndOptionalUUID
 	if usesProfileKey && !options.NoPublicKey && keyPair == nil && c.Auth.AsTk != "" {
-		fetched, err := user.GetOrFetchKeyPair(c.Auth.AsTk)
+		fetched, err := user.GetOrFetchKeyPairContext(options.Context, c.Auth.AsTk)
 		if err != nil {
 			return pk.Packet{}, fmt.Errorf("fetch profile public key: %w", err)
 		}
@@ -238,15 +238,16 @@ func (c *Client) loginStartPacket(profile *protocol.Profile, options JoinOptions
 	switch profile.LoginStartStyle() {
 	case protocol.LoginStartNameOnly:
 	case protocol.LoginStartNameAndOptionalSignature:
-		fields = append(fields, pk.OptionEncoder[user.KeyPairResp]{
-			Has: pk.Boolean(keyPair != nil),
-			Val: valueOrZero(keyPair),
-		})
+		fields = append(fields, pk.Boolean(keyPair != nil))
+		if keyPair != nil {
+			fields = append(fields, keyPair.Encoder(user.CertificateSignatureV1))
+		}
 	case protocol.LoginStartNameSignatureAndOptionalUUID:
-		fields = append(fields, pk.OptionEncoder[user.KeyPairResp]{
-			Has: pk.Boolean(keyPair != nil),
-			Val: valueOrZero(keyPair),
-		}, pk.Boolean(hasUUID))
+		fields = append(fields, pk.Boolean(keyPair != nil))
+		if keyPair != nil {
+			fields = append(fields, keyPair.Encoder(user.CertificateSignatureV2))
+		}
+		fields = append(fields, pk.Boolean(hasUUID))
 		if hasUUID {
 			fields = append(fields, pk.UUID(c.UUID))
 		}
@@ -267,13 +268,6 @@ func (c *Client) loginStartPacket(profile *protocol.Profile, options JoinOptions
 		return pk.Packet{}, err
 	}
 	return pk.Marshal(packetID, fields...), nil
-}
-
-func valueOrZero[T any](value *T) (zero T) {
-	if value != nil {
-		return *value
-	}
-	return zero
 }
 
 func (c *Client) scanLoginSuccess(profile *protocol.Profile, p pk.Packet) error {

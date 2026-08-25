@@ -81,3 +81,27 @@ func TestLoginSuccessStringUUIDDashBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigurationRegistryDataStyleBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		protocol int32
+		want     ConfigurationRegistryDataStyle
+	}{
+		{protocol: 763, want: ConfigurationRegistryDataUnsupported},
+		{protocol: 764, want: ConfigurationRegistryDataCompound},
+		{protocol: 765, want: ConfigurationRegistryDataCompound},
+		{protocol: 766, want: ConfigurationRegistryDataPerRegistry},
+		{protocol: 767, want: ConfigurationRegistryDataPerRegistry},
+		{protocol: 776, want: ConfigurationRegistryDataPerRegistry},
+	} {
+		p := &Profile{key: Key{Transport: TransportNetty, Protocol: test.protocol}}
+		if got := p.ConfigurationRegistryDataStyle(); got != test.want {
+			t.Errorf("protocol %d ConfigurationRegistryDataStyle() = %d, want %d", test.protocol, got, test.want)
+		}
+	}
+
+	legacy := &Profile{key: Key{Transport: TransportLegacy, Protocol: 78}}
+	if got := legacy.ConfigurationRegistryDataStyle(); got != ConfigurationRegistryDataUnsupported {
+		t.Fatalf("legacy ConfigurationRegistryDataStyle() = %d, want unsupported", got)
+	}
+}

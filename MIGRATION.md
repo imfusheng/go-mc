@@ -69,7 +69,7 @@ client.Events.AddSemanticListener(bot.SemanticPacketHandler{
 })
 ```
 
-Configuration 协议会自动发送客户端信息。服务端行为准则绝不会被隐式接受：只有在应用已经针对确切文本取得同意后，才可设置 `Client.CodeOfConduct`。传送请求和缺少同意会以类型化错误公开。内置服务端注册表编解码器仍以 p767 为基线；在对应版本的注册表编解码器可用之前，多版本服务端应实现 `server.ProfileConfigHandler`。
+Configuration 协议会自动发送客户端信息。服务端行为准则绝不会被隐式接受：只有在应用已经针对确切文本取得同意后，才可设置 `Client.CodeOfConduct`。传送请求和缺少同意会以类型化错误公开。客户端可按 `protocol.Profile` 处理 p764-p765 的单个匿名 NBT codec 与 p766+ 的逐注册表数据包。内置 `server.Configurations` 仍只保留旧有的 p767 类型化注册表基线，并会拒绝空注册表；其他协议的 Vanilla 注册表模式并不向前兼容，服务端必须实现 `server.ProfileConfigHandler` 并提供该版本的完整数据。`Registries.AddRawNetworkRegistry` 可用于客户端保留较新的 Vanilla 或模组注册表，但不代表内置服务端已具备相应模式。
 
 ## 协议 767 物品栏位
 

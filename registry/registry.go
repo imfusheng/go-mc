@@ -22,6 +22,14 @@ func NewRegistry[E any]() Registry[E] {
 	}
 }
 
+// Len reports the number of entries retained by the registry.
+func (r *Registry[E]) Len() int {
+	if r == nil {
+		return 0
+	}
+	return len(r.values)
+}
+
 func (r *Registry[E]) Clear() {
 	r.keys = make(map[string]int32)
 	r.names = r.names[:0]
@@ -50,7 +58,16 @@ func (r *Registry[E]) Put(key string, data E) (id int32, val *E) {
 	return r.put(key, data, true)
 }
 
+// PutWithoutData adds a named network-registry entry whose optional element is
+// absent. This is used when the client is expected to obtain the element from
+// a negotiated known pack instead of the Registry Data packet.
+func (r *Registry[E]) PutWithoutData(key string) (id int32, val *E) {
+	var zero E
+	return r.put(key, zero, false)
+}
+
 func (r *Registry[E]) put(key string, data E, present bool) (id int32, val *E) {
+	r.ensureInitialized()
 	id = int32(len(r.values))
 	r.keys[key] = id
 	r.names = append(r.names, key)
@@ -59,6 +76,18 @@ func (r *Registry[E]) put(key string, data E, present bool) (id int32, val *E) {
 	val = &r.values[id]
 	r.indices[val] = id
 	return
+}
+
+func (r *Registry[E]) ensureInitialized() {
+	if r.keys == nil {
+		r.keys = make(map[string]int32)
+	}
+	if r.indices == nil {
+		r.indices = make(map[*E]int32)
+	}
+	if r.tags == nil {
+		r.tags = make(map[string][]*E)
+	}
 }
 
 // Tags

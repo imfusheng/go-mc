@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -222,13 +221,6 @@ func TestNilPlayHandlersReturnContextualError(t *testing.T) {
 }
 
 func TestHandleGameBundleDispatchAndBufferRelease(t *testing.T) {
-	// Keep the goroutine on one P so immediate sync.Pool Gets below observe all
-	// buffers returned by releasePacket without scheduling onto another P.
-	previousProcs := runtime.GOMAXPROCS(1)
-	defer runtime.GOMAXPROCS(previousProcs)
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	profile := protocol.MustByName("1.21.1")
 	delimiterID := requirePlayPacketID(t, profile, bundleDelimiterKind)
 	loginKind := protocol.PacketKind("login")
@@ -248,6 +240,10 @@ func TestHandleGameBundleDispatchAndBufferRelease(t *testing.T) {
 
 	client := newDispatchTestClient(profile)
 	client.Conn = &Conn{recv: recv}
+	released := make(map[int]int)
+	client.Conn.releasePacketHook = func(data []byte) {
+		released[cap(data)]++
+	}
 	var calls int
 	client.Events.AddSemanticListener(SemanticPacketHandler{
 		Kind: loginKind,
@@ -265,39 +261,99 @@ func TestHandleGameBundleDispatchAndBufferRelease(t *testing.T) {
 		t.Fatalf("semantic login calls = %d, want 1", calls)
 	}
 
-	wantCaps := map[int]bool{11: true, 13: true, 17: true}
-	for range 3 {
-		value := client.Conn.pool.Get()
-		data, ok := value.([]byte)
-		if !ok {
-			t.Fatalf("released pool value = %T, want []byte", value)
+	for _, capacity := range []int{11, 13, 17} {
+		if released[capacity] != 1 {
+			t.Errorf("buffer capacity %d release count = %d, want 1", capacity, released[capacity])
 		}
-		delete(wantCaps, cap(data))
-	}
-	if len(wantCaps) != 0 {
-		t.Errorf("buffers with capacities %v were not returned to the pool", wantCaps)
 	}
 }
 
-func TestBundleLimitReleasesBufferedPackets(t *testing.T) {
+func TestBundleLimitAcceptsExactlyMaximumPackets(t *testing.T) {
 	profile := protocol.MustByName("1.19.4")
 	loginID := requirePlayPacketID(t, profile, protocol.PacketKind("login"))
-	recv := queue.NewChannelQueue[pk.Packet](maxBundlePackets)
-	for i := 0; i < maxBundlePackets; i++ {
+	delimiterID := requirePlayPacketID(t, profile, bundleDelimiterKind)
+	recv := queue.NewChannelQueue[pk.Packet](MaxBundlePackets + 1)
+	for i := 0; i < MaxBundlePackets; i++ {
+		if !recv.Push(pk.Packet{ID: loginID, Data: []byte{byte(i)}}) {
+			t.Fatalf("failed to enqueue packet %d", i)
+		}
+	}
+	if !recv.Push(pk.Packet{ID: delimiterID}) {
+		t.Fatal("failed to enqueue closing bundle delimiter")
+	}
+	client := newDispatchTestClient(profile)
+	client.Conn = &Conn{recv: recv}
+	var handled int
+	client.Events.AddSemanticListener(SemanticPacketHandler{
+		Kind: protocol.PacketKind("login"),
+		F: func(pk.Packet) error {
+			handled++
+			return nil
+		},
+	})
+	var released int
+	client.Conn.releasePacketHook = func([]byte) { released++ }
+	if err := client.handleBundlePackets(); err != nil {
+		t.Fatalf("handleBundlePackets() error = %v", err)
+	}
+	if handled != MaxBundlePackets {
+		t.Fatalf("handled bundle packets = %d, want %d", handled, MaxBundlePackets)
+	}
+	if released != MaxBundlePackets {
+		t.Fatalf("bundle packet releases = %d, want %d", released, MaxBundlePackets)
+	}
+}
+
+func TestBundleLimitRejectsPacketBeyondMaximum(t *testing.T) {
+	profile := protocol.MustByName("1.19.4")
+	loginID := requirePlayPacketID(t, profile, protocol.PacketKind("login"))
+	recv := queue.NewChannelQueue[pk.Packet](MaxBundlePackets + 1)
+	for i := 0; i <= MaxBundlePackets; i++ {
 		if !recv.Push(pk.Packet{ID: loginID, Data: []byte{byte(i)}}) {
 			t.Fatalf("failed to enqueue packet %d", i)
 		}
 	}
 	client := newDispatchTestClient(profile)
 	client.Conn = &Conn{recv: recv}
+	var released int
+	client.Conn.releasePacketHook = func([]byte) { released++ }
 	err := client.handleBundlePackets()
-	if err == nil || !strings.Contains(err.Error(), "out of limit") {
+	if err == nil || !strings.Contains(err.Error(), "packet count exceeds") {
 		t.Fatalf("handleBundlePackets() error = %v, want bundle limit error", err)
 	}
-	// Every buffered packet was returned. This intentionally checks only a
-	// sample because sync.Pool may discard entries at any garbage collection.
-	if value := client.Conn.pool.Get(); value == nil {
-		t.Fatal("bundle limit path did not return packet buffers")
+	if released != MaxBundlePackets+1 {
+		t.Fatalf("bundle packet releases = %d, want %d", released, MaxBundlePackets+1)
+	}
+}
+
+func TestBundleByteLimitRejectsBeforeRetainingMoreData(t *testing.T) {
+	profile := protocol.MustByName("1.19.4")
+	loginID := requirePlayPacketID(t, profile, protocol.PacketKind("login"))
+	recv := queue.NewChannelQueue[pk.Packet](2)
+	for _, capacity := range []int{11, 13} {
+		if !recv.Push(pk.Packet{ID: loginID, Data: make([]byte, 2, capacity)}) {
+			t.Fatal("failed to enqueue bundle packet")
+		}
+	}
+
+	client := newDispatchTestClient(profile)
+	client.Conn = &Conn{recv: recv}
+	released := make(map[int]int)
+	client.Conn.releasePacketHook = func(data []byte) {
+		released[cap(data)]++
+	}
+	// The first packet retains one ID byte plus an 11-byte backing array and
+	// exactly fills this test limit. The second retains 14 bytes despite its
+	// two-byte visible length, so it must be rejected before append.
+	err := client.handleBundlePacketsWithByteLimit(12)
+	if err == nil || !strings.Contains(err.Error(), "packet bytes exceed maximum 12") {
+		t.Fatalf("handleBundlePacketsWithByteLimit() error = %v, want byte limit error", err)
+	}
+
+	for _, capacity := range []int{11, 13} {
+		if released[capacity] != 1 {
+			t.Fatalf("buffer capacity %d release count = %d, want 1", capacity, released[capacity])
+		}
 	}
 }
 

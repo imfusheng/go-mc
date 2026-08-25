@@ -36,17 +36,27 @@ type Player struct {
 // NewPlayer create a new Player manager.
 func NewPlayer(c *bot.Client, settings Settings, events EventsListener) *Player {
 	p := &Player{c: c, Settings: settings}
-	c.Events.AddListener(
+	c.Events.AddListener(p.numericPacketHandlers()...)
+	c.Events.AddSemanticListener(p.semanticPacketHandlers()...)
+	events.attach(p)
+	return p
+}
+
+func (p *Player) numericPacketHandlers() []bot.PacketHandler {
+	return []bot.PacketHandler{
 		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundLogin, F: p.handleLoginPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundKeepAlive, F: p.handleKeepAlivePacket},
 		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundRespawn, F: p.handleRespawnPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPing, F: p.handlePingPacket},
 		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundCookieRequest, F: p.handleCookieRequestPacket},
 		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundStoreCookie, F: p.handleStoreCookiePacket},
 		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundUpdateTags, F: p.handleUpdateTags},
-	)
-	events.attach(p)
-	return p
+	}
+}
+
+func (p *Player) semanticPacketHandlers() []bot.SemanticPacketHandler {
+	return []bot.SemanticPacketHandler{
+		{Kind: playKeepAliveKind, F: p.handleKeepAlivePacket},
+		{Kind: playPingKind, F: p.handlePingPacket},
+	}
 }
 
 // Respawn is used to send a respawn packet to the server.

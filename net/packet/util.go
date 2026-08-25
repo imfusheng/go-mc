@@ -27,9 +27,16 @@ var (
 // Note that Ary DO read or write the Len. You aren't need to do so by your self.
 type Ary[LEN VarInt | VarLong | Byte | UnsignedByte | Short | UnsignedShort | Int | Long] struct {
 	Ary any // Slice or Pointer of Slice of FieldEncoder, FieldDecoder or both (Field)
+	// MaxLength optionally narrows the protocol-wide array limit. Zero uses
+	// MaxDataLength. A positive value must not exceed MaxDataLength.
+	MaxLength int
 }
 
 func (a Ary[LEN]) WriteTo(w io.Writer) (n int64, err error) {
+	maxLength, err := a.maxLength()
+	if err != nil {
+		return 0, err
+	}
 	array := reflect.ValueOf(a.Ary)
 	for array.Kind() == reflect.Ptr {
 		if array.IsNil() {
@@ -40,8 +47,8 @@ func (a Ary[LEN]) WriteTo(w io.Writer) (n int64, err error) {
 	if !array.IsValid() || (array.Kind() != reflect.Slice && array.Kind() != reflect.Array) {
 		return 0, fmt.Errorf("array must be a slice or array, got %T", a.Ary)
 	}
-	if array.Len() > MaxDataLength {
-		return 0, fmt.Errorf("array length %d exceeds maximum %d", array.Len(), MaxDataLength)
+	if array.Len() > maxLength {
+		return 0, fmt.Errorf("array length %d exceeds maximum %d", array.Len(), maxLength)
 	}
 	Len := LEN(array.Len())
 	if int64(Len) != int64(array.Len()) {
@@ -78,6 +85,10 @@ func (a Ary[LEN]) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (a Ary[LEN]) ReadFrom(r io.Reader) (n int64, err error) {
+	maxLength, err := a.maxLength()
+	if err != nil {
+		return 0, err
+	}
 	var Len LEN
 	if nn, err := any(&Len).(FieldDecoder).ReadFrom(r); err != nil {
 		return nn, err
@@ -88,8 +99,8 @@ func (a Ary[LEN]) ReadFrom(r io.Reader) (n int64, err error) {
 	if length64 < 0 {
 		return n, fmt.Errorf("array has negative length %d", length64)
 	}
-	if length64 > MaxDataLength {
-		return n, fmt.Errorf("array length %d exceeds maximum %d", length64, MaxDataLength)
+	if length64 > int64(maxLength) {
+		return n, fmt.Errorf("array length %d exceeds maximum %d", length64, maxLength)
 	}
 	length := int(length64)
 
@@ -140,8 +151,28 @@ func (a Ary[LEN]) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, err
 }
 
+func (a Ary[LEN]) maxLength() (int, error) {
+	if a.MaxLength < 0 {
+		return 0, fmt.Errorf("array maximum length %d is negative", a.MaxLength)
+	}
+	if a.MaxLength == 0 {
+		return MaxDataLength, nil
+	}
+	if a.MaxLength > MaxDataLength {
+		return 0, fmt.Errorf("array maximum length %d exceeds protocol maximum %d", a.MaxLength, MaxDataLength)
+	}
+	return a.MaxLength, nil
+}
+
 func Array(ary any) Field {
 	return Ary[VarInt]{Ary: ary}
+}
+
+// ArrayWithLimit is Array with a schema-specific element limit. The limit is
+// checked immediately after the wire count is read and before the destination
+// slice is allocated.
+func ArrayWithLimit(ary any, maxLength int) Field {
+	return Ary[VarInt]{Ary: ary, MaxLength: maxLength}
 }
 
 // Opt is an optional [Field] which sending/receiving or not is depending on its Has field.

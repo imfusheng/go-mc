@@ -11,11 +11,18 @@ import (
 	pk "github.com/imfusheng/go-mc/net/packet"
 	"github.com/imfusheng/go-mc/protocol"
 	"github.com/imfusheng/go-mc/registry"
-	"github.com/imfusheng/go-mc/server"
 )
 
-func TestClientAndServerConfigurationAreWireCompatible(t *testing.T) {
-	profile := protocol.MustByName("1.21.1")
+func TestClientConfigurationParsesRegistryWireFamilies(t *testing.T) {
+	for _, version := range []string{"1.20.2", "1.20.4", "1.20.5", "1.21.1", "26.2"} {
+		t.Run(version, func(t *testing.T) {
+			testClientAndServerConfigurationAreWireCompatible(t, protocol.MustByName(version))
+		})
+	}
+}
+
+func testClientAndServerConfigurationAreWireCompatible(t *testing.T, profile *protocol.Profile) {
+	t.Helper()
 	serverSocket, clientSocket := stdnet.Pipe()
 	t.Cleanup(func() {
 		_ = serverSocket.Close()
@@ -23,16 +30,11 @@ func TestClientAndServerConfigurationAreWireCompatible(t *testing.T) {
 	})
 	serverConn := mcnet.WrapConn(serverSocket)
 	clientConn := mcnet.WrapConn(clientSocket)
-	config := server.Configurations{Registries: registry.NewNetworkCodec()}
 	client := &Client{}
 
 	serverResult := make(chan error, 1)
 	go func() {
-		if err := consumeClientConfigurationSettings(serverConn, profile); err != nil {
-			serverResult <- err
-			return
-		}
-		serverResult <- config.AcceptConfig(serverConn)
+		serverResult <- serveConfigurationWireFixture(serverConn, profile)
 	}()
 	clientResult := make(chan error, 1)
 	go func() { clientResult <- client.joinConfiguration(clientConn, profile) }()
@@ -50,6 +52,67 @@ func TestClientAndServerConfigurationAreWireCompatible(t *testing.T) {
 			t.Fatalf("%s configuration did not complete", name)
 		}
 	}
+}
+
+// serveConfigurationWireFixture deliberately sends empty registry fixtures:
+// this integration test covers the client's versioned packet parser, not a
+// playable Vanilla server registry datapack.
+func serveConfigurationWireFixture(conn *mcnet.Conn, profile *protocol.Profile) error {
+	if err := consumeClientConfigurationSettings(conn, profile); err != nil {
+		return err
+	}
+	registries := registry.NewNetworkCodec()
+	registryID, err := protocol.RequirePacketID(
+		profile, protocol.StateConfiguration, protocol.Clientbound, protocol.PacketConfigRegistryData,
+	)
+	if err != nil {
+		return err
+	}
+	switch profile.ConfigurationRegistryDataStyle() {
+	case protocol.ConfigurationRegistryDataCompound:
+		codec, err := registries.LegacyNetworkCodec()
+		if err != nil {
+			return err
+		}
+		if err := conn.WritePacket(pk.Marshal(registryID, codec)); err != nil {
+			return err
+		}
+	case protocol.ConfigurationRegistryDataPerRegistry:
+		for _, networkRegistry := range registries.NetworkRegistriesForProtocol(profile.Key().Protocol) {
+			if err := conn.WritePacket(pk.Marshal(
+				registryID, pk.Identifier(networkRegistry.ID), networkRegistry.Codec,
+			)); err != nil {
+				return err
+			}
+		}
+	default:
+		return protocol.UnsupportedCapabilityError{
+			Version: profile.Version().Name, Capability: "configuration registry fixture",
+		}
+	}
+	finishID, err := protocol.RequirePacketID(
+		profile, protocol.StateConfiguration, protocol.Clientbound, protocol.PacketConfigFinish,
+	)
+	if err != nil {
+		return err
+	}
+	if err := conn.WritePacket(pk.Marshal(finishID)); err != nil {
+		return err
+	}
+	var acknowledgement pk.Packet
+	if err := conn.ReadPacket(&acknowledgement); err != nil {
+		return err
+	}
+	wantAcknowledgement, err := protocol.RequirePacketID(
+		profile, protocol.StateConfiguration, protocol.Serverbound, protocol.PacketConfigFinish,
+	)
+	if err != nil {
+		return err
+	}
+	if acknowledgement.ID != wantAcknowledgement || len(acknowledgement.Data) != 0 {
+		return errors.New("wrong configuration acknowledgement")
+	}
+	return nil
 }
 
 func TestConfigurationPreservesUnknownRegistry(t *testing.T) {

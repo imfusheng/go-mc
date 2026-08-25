@@ -3,6 +3,8 @@ package bot
 import (
 	"errors"
 	stdnet "net"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	mcnet "github.com/imfusheng/go-mc/net"
 	pk "github.com/imfusheng/go-mc/net/packet"
 	"github.com/imfusheng/go-mc/protocol"
+	"github.com/imfusheng/go-mc/registry"
 )
 
 func TestConfigurationSettingsAndFinishAcrossProfiles(t *testing.T) {
@@ -283,6 +286,41 @@ func TestConfigurationRejectsMalformedMandatoryPayload(t *testing.T) {
 				t.Fatal("malformed keep-alive was accepted")
 			}
 		})
+	}
+}
+
+func TestConfigurationRejectsOversizedKnownPackCountBeforeAllocation(t *testing.T) {
+	client := NewClient()
+	profile, server, result := startProfileConfiguration(t, "26.2", client)
+	assertConfigurationSettings(t, server, profile, *client.ConfigurationSettings)
+
+	// The payload contains only a count. The generic packet array limit would
+	// otherwise permit this value and allocate a very large []DataPack before
+	// discovering that the first element is absent.
+	writeConfigPacket(t, server, profile, protocol.Clientbound, protocol.PacketConfigSelectKnownPacks,
+		pk.VarInt(pk.MaxDataLength),
+	)
+	err := waitConfigurationResult(t, result)
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum "+strconv.Itoa(MaxConfigurationKnownPacks)) {
+		t.Fatalf("joinConfiguration() error = %v, want known-pack limit error", err)
+	}
+}
+
+func TestConfigurationRejectsOversizedUnknownRegistryTag(t *testing.T) {
+	client := NewClient()
+	profile, server, result := startProfileConfiguration(t, "1.21.1", client)
+	assertConfigurationSettings(t, server, profile, *client.ConfigurationSettings)
+
+	writeConfigPacket(t, server, profile, protocol.Clientbound, protocol.PacketConfigTags,
+		pk.VarInt(1),
+		pk.Identifier("minecraft:future_registry"),
+		pk.VarInt(1),
+		pk.Identifier("minecraft:oversized"),
+		pk.VarInt(registry.MaxNetworkTagEntries+1),
+	)
+	err := waitConfigurationResult(t, result)
+	if err == nil || !strings.Contains(err.Error(), "tag value count") {
+		t.Fatalf("joinConfiguration() error = %v, want tag element limit error", err)
 	}
 }
 
