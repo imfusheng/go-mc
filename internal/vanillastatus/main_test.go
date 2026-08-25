@@ -171,13 +171,13 @@ func TestVerifyStopsAtOverallDeadline(t *testing.T) {
 	}
 }
 
-func TestVerifyRejectsInvalidJSONImmediately(t *testing.T) {
+func TestVerifyRetriesInvalidJSONUntilDeadline(t *testing.T) {
 	version := protocol.MustByName("1.20.6").Version()
 	cfg := config{
 		address:        "localhost:25565",
-		overallTimeout: time.Second,
-		attemptTimeout: time.Second,
-		retryInterval:  time.Second,
+		overallTimeout: 20 * time.Millisecond,
+		attemptTimeout: 5 * time.Millisecond,
+		retryInterval:  0,
 	}
 	calls := 0
 	ping := func(context.Context, string, bot.PingOptions) ([]byte, time.Duration, error) {
@@ -185,12 +185,49 @@ func TestVerifyRejectsInvalidJSONImmediately(t *testing.T) {
 		return []byte("not JSON"), 0, nil
 	}
 
-	_, err := verify(context.Background(), cfg, version, ping, func(context.Context, string, *protocol.Profile) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), "invalid status JSON") {
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.overallTimeout)
+	defer cancel()
+	_, err := verify(ctx, cfg, version, ping, func(context.Context, string, *protocol.Profile) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "invalid status JSON") || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("calls = %d, want 1", calls)
+	if calls < 2 {
+		t.Fatalf("calls = %d, want at least 2 retries", calls)
+	}
+}
+
+func TestVerifyRetriesPlaceholderStatusDuringStartup(t *testing.T) {
+	version, err := catalogueVersion("1.7.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config{
+		address:        "localhost:25565",
+		overallTimeout: time.Second,
+		attemptTimeout: 100 * time.Millisecond,
+		retryInterval:  0,
+	}
+	var calls int
+	ping := func(context.Context, string, bot.PingOptions) ([]byte, time.Duration, error) {
+		calls++
+		if calls == 1 {
+			return statusJSON(t, "", 0), 0, nil
+		}
+		return statusJSON(t, "1.7.10", 5), time.Millisecond, nil
+	}
+	var joins int
+	join := func(context.Context, string, *protocol.Profile) error {
+		joins++
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.overallTimeout)
+	defer cancel()
+	got, err := verify(ctx, cfg, version, ping, join)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || joins != 1 || got.attempts != 2 || !got.enteredPlay {
+		t.Fatalf("calls=%d joins=%d result=%+v", calls, joins, got)
 	}
 }
 

@@ -174,14 +174,15 @@ func verify(ctx context.Context, cfg config, version protocol.Version, ping ping
 		if err == nil {
 			var status statusResponse
 			if decodeErr := json.Unmarshal(data, &status); decodeErr != nil {
-				cancel()
-				return result{}, fmt.Errorf("attempt %d returned invalid status JSON: %w", attempts, decodeErr)
-			}
-			if err := validateStatus(status, version); err != nil {
-				cancel()
-				return result{}, fmt.Errorf("attempt %d returned an incompatible status: %w", attempts, err)
-			}
-			if version.Transport == protocol.TransportLegacy {
+				err = fmt.Errorf("invalid status JSON: %w", decodeErr)
+			} else if validateErr := validateStatus(status, version); validateErr != nil {
+				// Early Netty servers can answer Status with a zero/placeholder
+				// version while the world is still being prepared. Treat every
+				// incompatible readiness response as transient; the overall
+				// deadline still makes a genuinely wrong server fail with the last
+				// observed mismatch preserved in the diagnostic.
+				err = fmt.Errorf("incompatible status: %w", validateErr)
+			} else if version.Transport == protocol.TransportLegacy {
 				cancel()
 				return result{
 					version:  version,
@@ -189,8 +190,7 @@ func verify(ctx context.Context, cfg config, version protocol.Version, ping ping
 					latency:  latency,
 					attempts: attempts,
 				}, nil
-			}
-			if joinErr := join(attemptCtx, cfg.address, profile); joinErr == nil {
+			} else if joinErr := join(attemptCtx, cfg.address, profile); joinErr == nil {
 				cancel()
 				return result{
 					version:     version,
