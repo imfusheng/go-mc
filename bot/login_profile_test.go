@@ -130,6 +130,7 @@ func TestLoginPluginResponseFailsOnProtocol485MappingGap(t *testing.T) {
 
 func TestClientLoginStateAcrossEveryNettyProfile(t *testing.T) {
 	wantID := uuid.MustParse("12345678-1234-5678-90ab-cdef12345678")
+	wantSessionID := uuid.MustParse("87654321-4321-8765-ba09-876543210fed")
 	for _, profile := range protocol.Profiles() {
 		if profile.Key().Transport != protocol.TransportNetty {
 			continue
@@ -178,6 +179,9 @@ func TestClientLoginStateAcrossEveryNettyProfile(t *testing.T) {
 			if profile.LoginSuccessHasStrictErrorHandling() {
 				fields = append(fields, pk.Boolean(false))
 			}
+			if profile.LoginSuccessHasSessionID() {
+				fields = append(fields, pk.UUID(wantSessionID))
+			}
 			successID, err := protocol.RequirePacketID(profile, protocol.StateLogin, protocol.Clientbound, protocol.PacketLoginSuccess)
 			if err != nil {
 				t.Fatalf("resolve Login Success: %v", err)
@@ -210,6 +214,13 @@ func TestClientLoginStateAcrossEveryNettyProfile(t *testing.T) {
 			}
 			if client.UUID != wantID || client.Name != "ProfileTest" {
 				t.Fatalf("profile = %s/%s", client.UUID, client.Name)
+			}
+			if profile.LoginSuccessHasSessionID() {
+				if client.SessionID != wantSessionID {
+					t.Fatalf("session ID = %s, want %s", client.SessionID, wantSessionID)
+				}
+			} else if client.SessionID != uuid.Nil {
+				t.Fatalf("legacy session ID = %s, want nil", client.SessionID)
 			}
 		})
 	}

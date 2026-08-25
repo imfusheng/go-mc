@@ -67,6 +67,45 @@ func TestScanLoginSuccessRejectsMalformedCountsAndTrailingData(t *testing.T) {
 	}
 }
 
+func TestScanLoginSuccessSessionIDBoundary(t *testing.T) {
+	wantID := uuid.MustParse("12345678-1234-5678-90ab-cdef12345678")
+	wantSessionID := uuid.MustParse("87654321-4321-8765-ba09-876543210fed")
+	baseFields := []pk.FieldEncoder{
+		pk.UUID(wantID),
+		pk.String("ProfileTest"),
+		pk.VarInt(0),
+	}
+
+	p776 := protocol.MustByName("26.2")
+	packet := pk.Marshal(packetid.ClientboundLoginGameProfile, append(baseFields, pk.UUID(wantSessionID))...)
+	client := NewClient()
+	if err := client.scanLoginSuccess(p776, packet); err != nil {
+		t.Fatalf("scan p776 Login Success: %v", err)
+	}
+	if client.SessionID != wantSessionID {
+		t.Fatalf("session ID = %s, want %s", client.SessionID, wantSessionID)
+	}
+
+	missing := pk.Marshal(packetid.ClientboundLoginGameProfile, baseFields...)
+	if err := NewClient().scanLoginSuccess(p776, missing); err == nil {
+		t.Fatal("p776 Login Success accepted a missing session UUID")
+	}
+	truncated := packet
+	truncated.Data = append([]byte(nil), packet.Data[:len(packet.Data)-1]...)
+	if err := NewClient().scanLoginSuccess(p776, truncated); err == nil {
+		t.Fatal("p776 Login Success accepted a 15-byte session UUID")
+	}
+	extra := pk.Marshal(packetid.ClientboundLoginGameProfile, append(baseFields, pk.UUID(wantSessionID), pk.Byte(1))...)
+	if err := NewClient().scanLoginSuccess(p776, extra); err == nil {
+		t.Fatal("p776 Login Success accepted data after the session UUID")
+	}
+
+	p775 := protocol.MustByName("26.1.2")
+	if err := NewClient().scanLoginSuccess(p775, packet); err == nil {
+		t.Fatal("p775 Login Success accepted the p776 session UUID")
+	}
+}
+
 func TestLoginDisconnectEncodingBoundary(t *testing.T) {
 	reason := chat.Text("version boundary")
 	for _, test := range []struct {

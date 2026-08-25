@@ -124,6 +124,41 @@ func TestPre18LoginOmitsUnavailableCompressionPacket(t *testing.T) {
 	}
 }
 
+func TestMojangLoginHandlerSessionIDIsStableConcurrently(t *testing.T) {
+	handler := new(MojangLoginHandler)
+	const callers = 32
+	type result struct {
+		id  uuid.UUID
+		err error
+	}
+	start := make(chan struct{})
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			<-start
+			id, err := handler.getSessionID()
+			results <- result{id: id, err: err}
+		}()
+	}
+	close(start)
+
+	var first uuid.UUID
+	for i := 0; i < callers; i++ {
+		got := <-results
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if got.id == uuid.Nil {
+			t.Fatal("session ID is nil")
+		}
+		if i == 0 {
+			first = got.id
+		} else if got.id != first {
+			t.Fatalf("session ID = %s, want stable %s", got.id, first)
+		}
+	}
+}
+
 func loginStartFixture(profile *protocol.Profile) pk.Packet {
 	fields := []pk.FieldEncoder{pk.String("ProfileTest")}
 	switch profile.LoginStartStyle() {
@@ -191,6 +226,15 @@ func assertLoginSuccessFixture(t *testing.T, profile *protocol.Profile, data []b
 		var strict pk.Boolean
 		if _, err := strict.ReadFrom(r); err != nil {
 			t.Fatalf("read strict error handling: %v", err)
+		}
+	}
+	if profile.LoginSuccessHasSessionID() {
+		var sessionID pk.UUID
+		if _, err := sessionID.ReadFrom(r); err != nil {
+			t.Fatalf("read login session UUID: %v", err)
+		}
+		if uuid.UUID(sessionID) == uuid.Nil {
+			t.Fatal("login session UUID is nil")
 		}
 	}
 	if r.Len() != 0 {

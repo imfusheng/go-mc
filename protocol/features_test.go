@@ -11,22 +11,24 @@ func TestLoginWireFamilies(t *testing.T) {
 		shortLen   bool
 		properties bool
 		strict     bool
+		sessionID  bool
 		verifyOpt  bool
 	}{
-		{4, LoginStartNameOnly, false, true, true, false, false, false},
-		{47, LoginStartNameOnly, false, true, false, false, false, false},
-		{578, LoginStartNameOnly, false, true, false, false, false, false},
-		{735, LoginStartNameOnly, false, false, false, false, false, false},
-		{758, LoginStartNameOnly, false, false, false, false, false, false},
-		{759, LoginStartNameAndOptionalSignature, false, false, false, true, false, true},
-		{760, LoginStartNameSignatureAndOptionalUUID, false, false, false, true, false, true},
-		{761, LoginStartNameAndOptionalUUID, false, false, false, true, false, false},
-		{763, LoginStartNameAndOptionalUUID, false, false, false, true, false, false},
-		{764, LoginStartNameAndUUID, true, false, false, true, false, false},
-		{766, LoginStartNameAndUUID, true, false, false, true, true, false},
-		{767, LoginStartNameAndUUID, true, false, false, true, true, false},
-		{768, LoginStartNameAndUUID, true, false, false, true, false, false},
-		{776, LoginStartNameAndUUID, true, false, false, true, false, false},
+		{4, LoginStartNameOnly, false, true, true, false, false, false, false},
+		{47, LoginStartNameOnly, false, true, false, false, false, false, false},
+		{578, LoginStartNameOnly, false, true, false, false, false, false, false},
+		{735, LoginStartNameOnly, false, false, false, false, false, false, false},
+		{758, LoginStartNameOnly, false, false, false, false, false, false, false},
+		{759, LoginStartNameAndOptionalSignature, false, false, false, true, false, false, true},
+		{760, LoginStartNameSignatureAndOptionalUUID, false, false, false, true, false, false, true},
+		{761, LoginStartNameAndOptionalUUID, false, false, false, true, false, false, false},
+		{763, LoginStartNameAndOptionalUUID, false, false, false, true, false, false, false},
+		{764, LoginStartNameAndUUID, true, false, false, true, false, false, false},
+		{766, LoginStartNameAndUUID, true, false, false, true, true, false, false},
+		{767, LoginStartNameAndUUID, true, false, false, true, true, false, false},
+		{768, LoginStartNameAndUUID, true, false, false, true, false, false, false},
+		{775, LoginStartNameAndUUID, true, false, false, true, false, false, false},
+		{776, LoginStartNameAndUUID, true, false, false, true, false, true, false},
 	}
 
 	for _, test := range tests {
@@ -48,6 +50,9 @@ func TestLoginWireFamilies(t *testing.T) {
 		}
 		if got := p.LoginSuccessHasStrictErrorHandling(); got != test.strict {
 			t.Errorf("protocol %d LoginSuccessHasStrictErrorHandling() = %v, want %v", test.protocol, got, test.strict)
+		}
+		if got := p.LoginSuccessHasSessionID(); got != test.sessionID {
+			t.Errorf("protocol %d LoginSuccessHasSessionID() = %v, want %v", test.protocol, got, test.sessionID)
 		}
 		if got := p.EncryptionResponseUsesVerifyTokenOption(); got != test.verifyOpt {
 			t.Errorf("protocol %d EncryptionResponseUsesVerifyTokenOption() = %v, want %v", test.protocol, got, test.verifyOpt)

@@ -99,6 +99,12 @@ func (p *Profile) LoginSuccessHasStrictErrorHandling() bool {
 	return p != nil && p.key.Transport == TransportNetty && p.key.Protocol >= 766 && p.key.Protocol <= 767
 }
 
+// LoginSuccessHasSessionID reports whether Login Success appends the server
+// session UUID introduced with Java Edition 26.2 (protocol 776).
+func (p *Profile) LoginSuccessHasSessionID() bool {
+	return p != nil && p.key.Transport == TransportNetty && p.key.Protocol >= 776
+}
+
 // LoginByteArraysUseShortLength reports the 1.7 encryption packet exception.
 // All later Netty profiles use VarInt-prefixed byte arrays.
 func (p *Profile) LoginByteArraysUseShortLength() bool {

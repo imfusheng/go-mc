@@ -142,7 +142,8 @@ func testJoinServerWireProfile(t *testing.T, profile *protocol.Profile) {
 	assertLoginStartFixture(t, profile, loginStart.Data)
 
 	wantUUID := uuid.MustParse("12345678-1234-5678-90ab-cdef12345678")
-	if err := serverWire.WritePacket(joinProfileLoginSuccess(profile, loginSuccessID, wantUUID)); err != nil {
+	wantSessionID := uuid.MustParse("87654321-4321-8765-ba09-876543210fed")
+	if err := serverWire.WritePacket(joinProfileLoginSuccess(profile, loginSuccessID, wantUUID, wantSessionID)); err != nil {
 		t.Fatalf("write Login Success: %v", err)
 	}
 
@@ -190,6 +191,13 @@ func testJoinServerWireProfile(t *testing.T, profile *protocol.Profile) {
 	}
 	if client.UUID != wantUUID || client.Name != "ProfileTest" {
 		t.Fatalf("logged-in profile = %s/%s, want %s/ProfileTest", client.UUID, client.Name, wantUUID)
+	}
+	if profile.LoginSuccessHasSessionID() {
+		if client.SessionID != wantSessionID {
+			t.Fatalf("session ID = %s, want %s", client.SessionID, wantSessionID)
+		}
+	} else if client.SessionID != uuid.Nil {
+		t.Fatalf("legacy session ID = %s, want nil", client.SessionID)
 	}
 
 	type packetResult struct {
@@ -256,8 +264,8 @@ func scanJoinProfileFields(data []byte, fields ...pk.FieldDecoder) error {
 	return nil
 }
 
-func joinProfileLoginSuccess(profile *protocol.Profile, packetID int32, id uuid.UUID) pk.Packet {
-	fields := make([]pk.FieldEncoder, 0, 4)
+func joinProfileLoginSuccess(profile *protocol.Profile, packetID int32, id, sessionID uuid.UUID) pk.Packet {
+	fields := make([]pk.FieldEncoder, 0, 5)
 	if profile.LoginSuccessUsesStringUUID() {
 		wireID := id.String()
 		if !profile.LoginSuccessStringUUIDUsesDashes() {
@@ -273,6 +281,9 @@ func joinProfileLoginSuccess(profile *protocol.Profile, packetID int32, id uuid.
 	}
 	if profile.LoginSuccessHasStrictErrorHandling() {
 		fields = append(fields, pk.Boolean(false))
+	}
+	if profile.LoginSuccessHasSessionID() {
+		fields = append(fields, pk.UUID(sessionID))
 	}
 	return pk.Marshal(packetID, fields...)
 }

@@ -64,6 +64,12 @@ type MojangLoginHandler struct {
 	// PrivateKey is the key used by encrypt the connection.
 	privateKey     atomic.Pointer[rsa.PrivateKey]
 	lockPrivateKey sync.Mutex
+
+	// Minecraft 26.2 identifies the server process in Login Success. Keep one
+	// random UUID for the lifetime of this shared login handler, matching
+	// Vanilla's ServerConnectionListener session identifier.
+	sessionID     uuid.UUID
+	lockSessionID sync.Mutex
 }
 
 func (d *MojangLoginHandler) getPrivateKey() (key *rsa.PrivateKey, err error) {
@@ -84,6 +90,20 @@ func (d *MojangLoginHandler) getPrivateKey() (key *rsa.PrivateKey, err error) {
 		d.privateKey.Store(key)
 	}
 	return
+}
+
+func (d *MojangLoginHandler) getSessionID() (uuid.UUID, error) {
+	d.lockSessionID.Lock()
+	defer d.lockSessionID.Unlock()
+	if d.sessionID != uuid.Nil {
+		return d.sessionID, nil
+	}
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("create login session UUID: %w", err)
+	}
+	d.sessionID = id
+	return id, nil
 }
 
 /*
@@ -212,7 +232,14 @@ func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocolNumber int32) (
 		}
 	}
 	// send login success
-	err = writeLoginSuccess(conn, wireProfile, id, name, properties)
+	var sessionID uuid.UUID
+	if wireProfile.LoginSuccessHasSessionID() {
+		sessionID, err = d.getSessionID()
+		if err != nil {
+			return
+		}
+	}
+	err = writeLoginSuccess(conn, wireProfile, id, name, properties, sessionID)
 	if err != nil {
 		return
 	}
@@ -369,7 +396,7 @@ func readLoginByteArray(r *bytes.Reader, max int, field string) ([]byte, error) 
 	return value, nil
 }
 
-func writeLoginSuccess(conn *net.Conn, profile *protocol.Profile, id uuid.UUID, name string, properties []user.Property) error {
+func writeLoginSuccess(conn *net.Conn, profile *protocol.Profile, id uuid.UUID, name string, properties []user.Property, sessionID uuid.UUID) error {
 	if conn == nil {
 		return fmt.Errorf("nil connection")
 	}
@@ -382,7 +409,7 @@ func writeLoginSuccess(conn *net.Conn, profile *protocol.Profile, id uuid.UUID, 
 	if len(properties) > maxLoginSuccessProperties {
 		return fmt.Errorf("too many profile properties: %d (maximum %d)", len(properties), maxLoginSuccessProperties)
 	}
-	fields := make([]pk.FieldEncoder, 0, 4)
+	fields := make([]pk.FieldEncoder, 0, 5)
 	if profile.LoginSuccessUsesStringUUID() {
 		wireID := id.String()
 		// Protocol 4 predates Mojang's switch to canonical dashed UUID
@@ -400,6 +427,12 @@ func writeLoginSuccess(conn *net.Conn, profile *protocol.Profile, id uuid.UUID, 
 	}
 	if profile.LoginSuccessHasStrictErrorHandling() {
 		fields = append(fields, pk.Boolean(false))
+	}
+	if profile.LoginSuccessHasSessionID() {
+		if sessionID == uuid.Nil {
+			return fmt.Errorf("Minecraft %s Login Success requires a non-nil session UUID", profile.Version().Name)
+		}
+		fields = append(fields, pk.UUID(sessionID))
 	}
 	packetID, err := protocol.RequirePacketID(profile, protocol.StateLogin, protocol.Clientbound, protocol.PacketLoginSuccess)
 	if err != nil {

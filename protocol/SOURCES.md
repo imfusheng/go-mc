@@ -87,6 +87,19 @@ generated/reports/packets.json SHA-256: 02ab88951f242b28cc91e77c9f05815982b155ce
 
 仓库内置的 `mojang_26_2_packets.json` 在 Mojang 生成的字节末尾添加了一个换行，以遵循仓库文本文件约定。生成器会规范化检出后的行尾，并在验证权威校验和之前恰好移除最后这个换行。它只会规范化经过审查的 Mojang 与 minecraft-data 生命周期名称等价项；除此之外，Mojang Play 数据包资源路径均保持不变。
 
+26.2 的 Login Success 负载边界也由 Mojang 官方构件直接核对。26.1.2（协议 775）的 `ClientboundLoginFinishedPacket` 构造器和组合式 `STREAM_CODEC` 只包含 `GameProfile`；26.2（协议 776）的同名 record 变为 `(GameProfile gameProfile, UUID sessionId)`，编码顺序为 `ByteBufCodecs.GAME_PROFILE` 后接 `UUIDUtil.STREAM_CODEC`，因此线路末尾恰好新增 16 字节。26.2 的 `ServerLoginPacketListenerImpl` 从 `ServerConnectionListener.getSessionId()` 取得该值；后者为服务端监听器惰性生成并复用 `UUID.randomUUID()`。官方客户端将收到的 `sessionId` 交给遥测世界会话管理器，不参与登录身份验签。用于确认协议边界的补充构件如下：
+
+```text
+26.1.2 版本元数据：https://piston-meta.mojang.com/v1/packages/5b584750df77780aa8d69e186d6f4a8b7a37ce8c/26.1.2.json
+26.1.2 server.jar SHA-1: 97ccd4c0ed3f81bbb7bfacddd1090b0c56f9bc51
+26.2 client.jar SHA-1: 2dc72797acbc1b63fc16a11c4ac393605f453754
+26.1.2 ClientboundLoginFinishedPacket.class SHA-256: c6782b6df83d643c853b77a415235cd479da5403bc6ce654eb418152e8cc2874
+26.2 ClientboundLoginFinishedPacket.class SHA-256: 97a7a33e418ad7b56ad58b1dfd1f8023c54ec3f73791bb2abcba2a3ecc74d942
+数据包类：net.minecraft.network.protocol.login.ClientboundLoginFinishedPacket
+服务端会话类：net.minecraft.server.network.ServerConnectionListener
+客户端处理类：net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl
+```
+
 生成器在 `internal/generateprotocol/sources/` 下嵌入精简且便于审查的快照。精简结果保留构建目录所用的每个来源字段和完整的数据包名称/ID map，但省略数据包字段模式及无关的开发元数据。
 
 ## 明确的协调规则

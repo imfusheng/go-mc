@@ -49,6 +49,7 @@ func (c *Client) joinLogin(conn *net.Conn, profile *protocol.Profile, options Jo
 		return LoginErr{"login start", err}
 	}
 	c.UUID = uuid.Nil
+	c.SessionID = uuid.Nil
 	if c.Auth.UUID != "" {
 		c.UUID, err = uuid.Parse(c.Auth.UUID)
 		if err != nil {
@@ -314,6 +315,14 @@ func (c *Client) scanLoginSuccess(profile *protocol.Profile, p pk.Packet) error 
 			return fmt.Errorf("read strict error handling: %w", err)
 		}
 	}
+	var sessionID uuid.UUID
+	if profile.LoginSuccessHasSessionID() {
+		var wireSessionID pk.UUID
+		if _, err := wireSessionID.ReadFrom(r); err != nil {
+			return fmt.Errorf("read login session UUID: %w", err)
+		}
+		sessionID = uuid.UUID(wireSessionID)
+	}
 	if r.Len() != 0 {
 		return fmt.Errorf("login success contains %d trailing bytes", r.Len())
 	}
@@ -321,6 +330,7 @@ func (c *Client) scanLoginSuccess(profile *protocol.Profile, p pk.Packet) error 
 	// Only publish the new profile after the complete packet has validated.
 	c.UUID = id
 	c.Name = name
+	c.SessionID = sessionID
 	c.Properties = properties
 	return nil
 }

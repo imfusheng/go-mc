@@ -28,8 +28,11 @@ type Client struct {
 	Profile *protocol.Profile
 
 	// These are filled when login process
-	Name       string
-	UUID       uuid.UUID
+	Name string
+	UUID uuid.UUID
+	// SessionID is the server session UUID carried by Login Success in
+	// Minecraft 26.2 and later. Earlier profiles leave it as uuid.Nil.
+	SessionID  uuid.UUID
 	Properties []user.Property
 	Registries registry.Registries
 	// UnknownRegistries preserves forward-compatible configuration registries
